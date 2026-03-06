@@ -4,7 +4,7 @@
 
 Code Agent Hub Server is a Go service that exposes HTTP/JSON APIs and SSE streaming for multi-client, multi-thread agent turns.
 The system targets ACP-compatible agent providers, lazily starts per-thread agents, persists interaction history in SQLite, and bridges runtime permission requests back to clients.
-Current built-in providers are `codex`, `opencode`, `gemini`, and `qwen`; `claude` remains planned.
+Current built-in providers are `codex`, `claude`, `opencode`, `gemini`, and `qwen`.
 This file is the source of milestone progress, validation commands, and next actions.
 
 ## Current Milestone
@@ -69,7 +69,7 @@ This file is the source of milestone progress, validation commands, and next act
   - finalized canonical Go module path as `github.com/beyond5959/go-acp-server`.
   - replaced placeholder import path references across in-repo Go sources/tests.
 - `Post-M8` embedded codex migration completed:
-  - switched codex provider from external `codex-acp-go` path-based process spawning to embedded `github.com/beyond5959/acp-adapter/pkg/acpadapter`.
+  - switched codex provider from external `codex-acp-go` path-based process spawning to embedded `github.com/beyond5959/acp-adapter/pkg/codexacp`.
   - removed user-facing codex binary path flags; codex runtime is now linked into server and lazily created per thread on first turn.
   - kept HTTP API semantics unchanged (`threads/turns/sse/permissions/history`) and preserved permission fail-closed round-trip.
   - updated `/v1/agents` codex status contract to runtime preflight-based `available|unavailable`.
@@ -91,7 +91,7 @@ This file is the source of milestone progress, validation commands, and next act
   - updated docs and tests to reflect absolute-cwd policy.
 - `Post-M8` docs framing update completed:
   - adjusted README/SPEC/API/ARCHITECTURE wording to emphasize ACP-compatible multi-agent goal.
-  - kept current-state note explicit: built-in providers are `codex`, `opencode`, `gemini`, and `qwen`.
+  - kept current-state note explicit: built-in providers are `codex`, `claude`, `opencode`, `gemini`, and `qwen`.
   - simplified README startup path to `agent-hub-server` with explicit `agent-hub-server --help` guidance.
 - `Post-M8` startup log UX simplification completed:
   - replaced startup JSON line with multi-line human-readable stderr summary (QR code + port and URL hint).
@@ -293,17 +293,8 @@ This file is the source of milestone progress, validation commands, and next act
 - Failure 1:
   - command: `go get modernc.org/sqlite`
   - error: `lookup proxy.golang.org: no such host`
-- Attempted GOPROXY fallback 1:
-  - command: `GOPROXY=https://goproxy.cn,direct go get modernc.org/sqlite`
-  - error: `lookup goproxy.cn: no such host`
-- Attempted GOPROXY fallback 2:
-  - command: `GOPROXY=direct go get modernc.org/sqlite`
-  - error: `lookup modernc.org: no such host`
 - Effective workaround:
   - used locally cached module `modernc.org/sqlite@v1.18.2` and offline-capable verification.
-- Failure 4:
-  - command: `go get github.com/beyond5959/acp-adapter@master`
-  - error: `lookup proxy.golang.org: no such host`
 - Effective workaround:
   - reused locally cached `github.com/beyond5959/acp-adapter` pseudo-version already present in module cache and pinned it as direct dependency in `go.mod`.
 
@@ -404,3 +395,101 @@ This file is the source of milestone progress, validation commands, and next act
   - executed validation:
     - pass: `cd internal/webui/web && npm run build`
     - pass: `go test ./...`
+
+- `Post-F9` thread model selection and switching completed:
+  - added thread update API `PATCH /v1/threads/{threadId}` (agentOptions-only payload) with ownership checks and active-turn conflict (`409`).
+  - added model discovery API `GET /v1/agents/{agentId}/models` (ACP handshake-backed).
+  - storage layer now supports `UpdateThreadAgentOptions` and updates thread `updated_at`.
+  - successful thread option update closes cached per-thread provider, so next turn re-initializes with new model config.
+  - wired runtime model discovery into all providers:
+    - `codex`/`claude`: ACP embedded `session/new.configOptions`.
+    - `gemini`/`opencode`/`qwen`: ACP `session/new.models.availableModels`.
+  - wired `agentOptions.modelId` forwarding into all providers:
+    - embedded `codex`/`claude` now pass `model` in ACP `session/new`.
+    - `gemini` now passes `model` in `session/new` and `session/prompt`.
+    - `opencode` passes `modelId` in `session/prompt`; `qwen` passes `model` in `session/prompt`.
+  - Web UI updates:
+    - new-thread modal model selector removed (create flow keeps agent/cwd/title/advanced JSON only).
+    - active thread header switched from free-text model input to ACP-backed model dropdown + Apply action.
+    - model controls are disabled while model lists load and during streaming turns.
+  - executed validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `go test ./...`
+
+- `Post-F9` thread session model config switched to ACP `configOptions` + immediate apply:
+  - added thread-scoped config options APIs:
+    - `GET /v1/threads/{threadId}/config-options`
+    - `POST /v1/threads/{threadId}/config-options`
+  - `POST` now applies model changes through ACP `session/set_config_option` (no separate apply endpoint/action).
+  - provider-side config option support added across all built-in agents:
+    - embedded: `codex`, `claude` (in-session `session/set_config_option` on cached runtime).
+    - stdio: `opencode`, `qwen`, `gemini` (ACP handshake + `session/set_config_option` apply path, then persist selected model for next turns).
+  - Web UI changes:
+    - removed thread header `Apply` button.
+    - model dropdown now applies immediately on selection.
+    - model source switched from agent-level model catalog to thread-level `configOptions` (`category=model`).
+    - model option descriptions are rendered under the selector in the chat header.
+  - thread metadata sync:
+    - successful model switch persists `agentOptions.modelId` for thread continuity and restart recovery.
+  - executed validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `go test ./...`
+
+- `Post-F9` thread reasoning selector and config override persistence completed:
+  - backend now persists non-model session config selections under `agentOptions.configOverrides` when `POST /v1/threads/{threadId}/config-options` succeeds.
+  - provider factories now restore persisted config overrides on fresh embedded sessions and per-turn stdio handshakes, so reasoning-style settings survive across future turns and restarts.
+  - Web UI composer footer now renders both `Model` and `Reasoning` controls; reasoning options refresh from the latest thread `configOptions` after model changes.
+  - reasoning control remains model-specific and is disabled/updated in the same active-turn safety envelope as model switching.
+  - added coverage for config override persistence and thread agent-option parsing.
+  - executed validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `go test ./...`
+
+- `Post-F9` shared agent config catalog caching completed:
+  - Web UI no longer re-fetches thread config options when switching between threads that use the same agent and already have a cached agent config catalog.
+  - frontend now keeps:
+    - thread-scoped current config state cache.
+    - agent-scoped shared config catalog cache for model/reasoning option lists.
+  - same-agent threads reuse the same model/reasoning lists while keeping independent selected current values derived from each thread's persisted `agentOptions`.
+  - composer footer pills now show only the selected model/reasoning names, without leading `MODEL` / `REASONING` labels.
+  - executed validation:
+    - pass: `cd internal/webui/web && npm run build`
+
+- `Post-F9` codex thread-config timeout fix (Playwright real-env regression):
+  - reproduced in real browser flow (Playwright MCP + local codex env): opening a codex thread triggered `GET /v1/threads/{threadId}/config-options` `503` caused by embedded startup timeout at 8s.
+  - fixed by increasing embedded runtime default startup timeout from `8s` to `30s` for:
+    - `internal/agents/codex`
+    - `internal/agents/claude`
+  - reran real browser flow:
+    - thread model list now loads successfully from ACP `configOptions`.
+    - model switching calls `POST /v1/threads/{threadId}/config-options` and persists selected model.
+    - no frontend console errors during switch flow.
+  - executed validation:
+    - pass: `go test ./...`
+
+- `Post-F9` codex model-discovery stability improvement:
+  - replaced per-request codex model discovery runtime startup/shutdown with a shared discovery client in `internal/agents/codex/models.go`.
+  - behavior changes:
+    - repeated `GET /v1/agents/codex/models` now reuses initialized embedded runtime instead of spawning and closing app-server each time.
+    - one automatic retry with fresh discovery client when cached client becomes unhealthy.
+    - explicit cleanup hook added in server shutdown (`codexagent.CloseDiscoveryClient()`).
+  - local validation:
+    - first call `GET /v1/agents/codex/models` took ~16s (initial discovery).
+    - second call returned in ~0ms from shared client (no repeated startup/shutdown).
+  - executed validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `go test ./...`
+
+- `Post-F9` persisted agent config catalog completed:
+  - added sqlite-backed `agent_config_catalogs` storage keyed by `agent_id + model_id`, with a reserved default snapshot row used when a thread has no explicit model selection yet.
+  - `GET /v1/threads/{threadId}/config-options` and `GET /v1/agents/{agentId}/models` now read persisted catalog data first, so service restart can keep serving model/reasoning metadata without blocking on live provider queries.
+  - `POST /v1/threads/{threadId}/config-options` now writes through both:
+    - thread-local selected values into `threads.agent_options_json`
+    - current model config catalog into sqlite for reuse across threads/restarts
+  - service startup now launches a background catalog refresher that silently re-queries built-in agents and refreshes stored model/reasoning catalogs without delaying frontend availability.
+  - Web UI config cache is now keyed by `agent + selected model`, so different threads on the same agent no longer accidentally reuse the wrong reasoning list for another model.
+  - executed validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `go test ./...`
+
+ 

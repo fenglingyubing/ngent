@@ -38,6 +38,7 @@ Modules:
 - On first thread usage: runtime requests provider instance for that thread.
 - On first turn execution for embedded-provider thread (currently `codex`): server creates the in-process runtime and initializes ACP session lazily.
 - Embedded runtime `session/new` is created with `cwd=thread.cwd` (validated as absolute path at thread creation).
+- If `thread.agent_options_json` contains `modelId`, providers apply it as model override during thread-level runtime/session initialization.
 - Provider instances are cached per thread and reclaimed by idle TTL (`--agent-idle-ttl`) when thread has no active turn.
 
 ## 5. Permission Bridge
@@ -88,7 +89,7 @@ On restart:
 ## 8. API Overview
 
 - health and server metadata
-- thread CRUD (create/list/get/delete)
+- thread CRUD (create/list/get/update/delete)
 - turn create/cancel
 - thread compact (`POST /v1/threads/{threadId}/compact`)
 - SSE stream for real-time events
@@ -103,6 +104,7 @@ See `docs/API.md` for endpoint and schema contracts.
 - strict input validation:
   - agent must be allowlisted.
   - cwd must be absolute.
+- thread option updates are rejected while a turn is active on the same thread.
 - logs are JSON on stderr and redact sensitive data.
 - HTTP payloads contain protocol data only.
 
@@ -170,7 +172,7 @@ and upstream ACP schema:
   - qwen preflight and status in `/v1/agents`.
   - add `qwen` to `AllowedAgentIDs`.
   - add `TurnAgentFactory` case for `thread.AgentID == "qwen"`.
-  - optional `agentOptions.modelId` mapped to ACP `session/set_model` (best effort).
+  - optional `agentOptions.modelId` mapped to ACP `session/prompt.model`.
 
 ### 11.4 R&D Task Breakdown
 
@@ -201,3 +203,108 @@ and upstream ACP schema:
 - Phase P4: full regression.
   - Deliverable: clean baseline for merge.
   - DoD: `npm run build` and `go test ./...` pass.
+
+## 12. Thread Model Selection and Switching (2026-03-05)
+
+### 12.1 Scope
+
+- New thread creation supports explicit model selection by writing `agentOptions.modelId`.
+- Existing thread supports model switching via thread update API and Web UI action.
+- Applies to all providers:
+  - `codex` and `claude` embedded runtimes receive `model` in ACP `session/new`.
+  - `gemini` ACP stdio provider receives `model` in `session/new` and `session/prompt`.
+  - `opencode` passes `modelId` in `session/prompt`.
+  - `qwen` passes `model` in `session/prompt`.
+
+### 12.2 API and Runtime Behavior
+
+- Added `PATCH /v1/threads/{threadId}` with request body containing `agentOptions` object.
+- Added `GET /v1/agents/{agentId}/models`:
+  - backend queries provider ACP handshake (`initialize` + `session/new`) and extracts runtime model options from `configOptions` / `models.availableModels`.
+  - returns normalized `[{"id","name"}]` entries for Web UI dropdowns.
+- Ownership rule is unchanged (`404` for cross-client or missing thread).
+- Active turn safety is strict:
+  - when the thread currently has an active turn, update returns `409 CONFLICT`.
+- On successful update:
+  - persist `threads.agent_options_json` and update `updated_at`.
+  - close cached per-thread provider instance so the next turn starts with updated model config.
+
+### 12.3 Web UI Behavior
+
+- New thread modal no longer exposes model selector; it keeps agent/cwd/title/advanced-options creation flow.
+- Active thread header uses model dropdown + apply button (runtime options from `GET /v1/agents/{agentId}/models`):
+  - apply calls `PATCH /v1/threads/{threadId}`.
+  - controls are disabled while model list is loading or while a turn is streaming.
+
+## 13. Thread Session Config Options and Immediate Model Switch (2026-03-05)
+
+### 13.1 Scope
+
+- Model configuration is sourced from ACP session config options, not hardcoded or static agent catalogs.
+- On thread open/new, UI reads current model from `session/new` equivalent data (`configOptions` where `category=model` or `id=model`).
+- Model switching is immediate on dropdown change (no apply button).
+- Reasoning configuration is sourced from the same thread `configOptions` payload and remains model-specific.
+
+### 13.2 API Contract
+
+- Added thread-scoped config options APIs:
+  - `GET /v1/threads/{threadId}/config-options`
+  - `POST /v1/threads/{threadId}/config-options` with body:
+    - `configId` (string, required)
+    - `value` (string, required)
+- `GET` response includes:
+  - `threadId`
+  - `configOptions[]` (ACP-shaped option objects with `currentValue` and `options[]`, including descriptions)
+- `POST` behavior:
+  - rejects while turn is active (`409 CONFLICT`).
+  - applies runtime update through ACP `session/set_config_option`.
+  - returns updated `configOptions`.
+  - persists thread config state for future turns:
+    - `configId=model` mirrors selected runtime value into `agentOptions.modelId`.
+    - non-model current values are mirrored into `agentOptions.configOverrides[configId]`.
+
+### 13.3 Provider Behavior
+
+- Introduced provider capability interface `ConfigOptionManager`:
+  - `ConfigOptions(ctx) ([]ConfigOption, error)`
+  - `SetConfigOption(ctx, configID, value) ([]ConfigOption, error)`
+- Embedded providers (`codex`, `claude`):
+  - keep session-local config options in cached runtime.
+  - `SetConfigOption` calls ACP `session/set_config_option` in the same session.
+  - on fresh runtime/session initialization, replay persisted `agentOptions.configOverrides` after `session/new`.
+- Stdio providers (`opencode`, `qwen`, `gemini`):
+  - perform ACP handshake for config query/apply and persist resulting config state for subsequent turns.
+  - on each fresh `session/new`, replay persisted `agentOptions.configOverrides` before `session/prompt`.
+  - preserve existing process-per-turn streaming execution model.
+
+### 13.4 Web UI Behavior
+
+- Composer footer now uses thread-level config source (`/v1/threads/{id}/config-options`) for both `Model` and `Reasoning`.
+- Selecting a model or reasoning value calls `POST /v1/threads/{id}/config-options` immediately.
+- Reasoning choices are re-read from the latest ACP response after model changes so the control stays model-specific.
+- frontend cache is keyed by `agent + selected model`, so same-agent threads can reuse the same model-specific catalog without incorrectly sharing another model's reasoning list.
+- Option descriptions are rendered inside the dropdown menus for selectable values.
+- During streaming or in-flight switch request, both controls are disabled to preserve turn/config safety.
+
+### 13.5 Catalog Persistence and Restart Refresh
+
+- Added sqlite table `agent_config_catalogs`:
+  - `agent_id`
+  - `model_id`
+  - `config_options_json`
+  - `updated_at`
+- Storage semantics:
+  - one reserved row per agent stores the default snapshot used when the thread has no explicit `modelId` yet.
+  - additional rows are stored per concrete model id and hold the ACP `configOptions` snapshot for that model, including model/reasoning option lists.
+- Read semantics:
+  - `GET /v1/threads/{threadId}/config-options` reads the persisted row matching the thread's selected model (or default row), then overlays thread-local selected values from `agentOptions.modelId` and `agentOptions.configOverrides`.
+  - `GET /v1/agents/{agentId}/models` derives normalized model list from persisted catalog rows before using live discovery fallback.
+- Write semantics:
+  - `POST /v1/threads/{threadId}/config-options` persists:
+    - thread-local current selection state into `threads.agent_options_json`
+    - current model's latest `configOptions` snapshot into `agent_config_catalogs`
+- Startup refresh:
+  - after HTTP server initialization, the process launches a background refresher goroutine.
+  - refresher queries default + per-model ACP config catalogs for all built-in agents and writes them back to sqlite.
+  - refresh is best-effort and non-blocking for HTTP startup.
+  - if some model refreshes fail, successful rows are upserted while older rows for failed models are preserved.

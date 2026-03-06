@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,26 +19,37 @@ import (
 	"time"
 
 	"github.com/beyond5959/go-acp-server/internal/agents"
+	"github.com/beyond5959/go-acp-server/internal/agents/acpmodel"
 )
 
 const (
-	jsonRPCVersion         = "2.0"
-	methodNotFound         = -32601
-	updateTypeMessageChunk = "agent_message_chunk"
+	jsonRPCVersion               = "2.0"
+	methodNotFound               = -32601
+	updateTypeMessageChunk       = "agent_message_chunk"
+	methodSessionSetConfigOption = "session/set_config_option"
 )
 
 // Config configures the Gemini CLI ACP stdio provider.
 type Config struct {
 	// Dir is the working directory for the Gemini session.
 	Dir string
+	// ModelID is the optional model identifier.
+	ModelID string
+	// ConfigOverrides are non-model ACP config values reapplied on new sessions.
+	ConfigOverrides map[string]string
 }
 
 // Client runs one gemini --experimental-acp process per Stream call.
 type Client struct {
-	dir string
+	mu sync.RWMutex
+
+	dir             string
+	modelID         string
+	configOverrides map[string]string
 }
 
 var _ agents.Streamer = (*Client)(nil)
+var _ agents.ConfigOptionManager = (*Client)(nil)
 
 // New constructs a Gemini CLI ACP client.
 func New(cfg Config) (*Client, error) {
@@ -45,7 +57,11 @@ func New(cfg Config) (*Client, error) {
 	if dir == "" {
 		return nil, errors.New("gemini: Dir is required")
 	}
-	return &Client{dir: dir}, nil
+	return &Client{
+		dir:             dir,
+		modelID:         strings.TrimSpace(cfg.ModelID),
+		configOverrides: normalizeConfigOverrides(cfg.ConfigOverrides),
+	}, nil
 }
 
 // Preflight checks that the gemini binary is available in PATH.
@@ -60,6 +76,54 @@ func Preflight() error {
 // Name returns the provider identifier.
 func (c *Client) Name() string { return "gemini" }
 
+// ConfigOptions queries ACP session config options.
+func (c *Client) ConfigOptions(ctx context.Context) ([]agents.ConfigOption, error) {
+	if c == nil {
+		return nil, errors.New("gemini: nil client")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return c.runConfigSession(ctx, c.currentModelID(), c.currentConfigOverrides(), "", "")
+}
+
+// SetConfigOption applies one ACP session config option.
+func (c *Client) SetConfigOption(ctx context.Context, configID, value string) ([]agents.ConfigOption, error) {
+	if c == nil {
+		return nil, errors.New("gemini: nil client")
+	}
+	configID = strings.TrimSpace(configID)
+	value = strings.TrimSpace(value)
+	if configID == "" {
+		return nil, errors.New("gemini: configID is required")
+	}
+	if value == "" {
+		return nil, errors.New("gemini: value is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	options, err := c.runConfigSession(ctx, c.currentModelID(), c.currentConfigOverrides(), configID, value)
+	if err != nil {
+		return nil, err
+	}
+	if strings.EqualFold(configID, "model") {
+		current := acpmodel.CurrentValueForConfig(options, "model")
+		if current == "" {
+			current = value
+		}
+		c.setModelID(current)
+		return options, nil
+	}
+	current := acpmodel.CurrentValueForConfig(options, configID)
+	if current == "" {
+		current = value
+	}
+	c.setConfigOverride(configID, current)
+	return options, nil
+}
+
 // Stream spawns gemini --experimental-acp, runs one turn, and streams deltas via onDelta.
 func (c *Client) Stream(ctx context.Context, input string, onDelta func(delta string) error) (agents.StopReason, error) {
 	if c == nil {
@@ -68,6 +132,9 @@ func (c *Client) Stream(ctx context.Context, input string, onDelta func(delta st
 	if onDelta == nil {
 		return agents.StopReasonEndTurn, errors.New("gemini: onDelta callback is required")
 	}
+
+	modelID := c.currentModelID()
+	configOverrides := c.currentConfigOverrides()
 
 	// Create a fresh GEMINI_CLI_HOME to prevent Gemini CLI from writing
 	// interactive auth prompts to stdout, which would corrupt the ACP stream.
@@ -80,7 +147,7 @@ func (c *Client) Stream(ctx context.Context, input string, onDelta func(delta st
 	defer os.RemoveAll(cliHome)
 
 	cmd := exec.Command("gemini", "--experimental-acp")
-	cmd.Env = appendOrReplace(os.Environ(), "GEMINI_CLI_HOME", cliHome)
+	cmd.Env = buildGeminiCLIEnv(cliHome)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -121,16 +188,23 @@ func (c *Client) Stream(ctx context.Context, input string, onDelta func(delta st
 	}
 
 	// 2. session/new
-	newResult, err := conn.Call(ctx, "session/new", map[string]any{
+	newParams := map[string]any{
 		"cwd":        c.dir,
 		"mcpServers": []any{},
-	})
+	}
+	if modelID != "" {
+		newParams["model"] = modelID
+	}
+	newResult, err := conn.Call(ctx, "session/new", newParams)
 	if err != nil {
 		return agents.StopReasonEndTurn, fmt.Errorf("gemini: session/new: %w", err)
 	}
 	sessionID := parseSessionID(newResult)
 	if sessionID == "" {
 		return agents.StopReasonEndTurn, errors.New("gemini: session/new returned empty sessionId")
+	}
+	if _, err := c.applyConfigOverrides(ctx, conn, sessionID, acpmodel.ExtractConfigOptions(newResult), configOverrides); err != nil {
+		return agents.StopReasonEndTurn, err
 	}
 
 	// 3. Wire streaming: agent_message_chunk updates → onDelta.
@@ -199,10 +273,14 @@ func (c *Client) Stream(ctx context.Context, input string, onDelta func(delta st
 	})
 
 	// 5. session/prompt — blocks until the model finishes or ctx is cancelled.
-	promptResult, err := conn.Call(ctx, "session/prompt", map[string]any{
+	promptParams := map[string]any{
 		"sessionId": sessionID,
 		"prompt":    []map[string]any{{"type": "text", "text": input}},
-	})
+	}
+	if modelID != "" {
+		promptParams["model"] = modelID
+	}
+	promptResult, err := conn.Call(ctx, "session/prompt", promptParams)
 	if err != nil {
 		if ctx.Err() != nil {
 			c.sendCancel(conn, sessionID)
@@ -221,6 +299,202 @@ func (c *Client) sendCancel(conn *rpcConn, sessionID string) {
 	cancelCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	conn.Notify(cancelCtx, "session/cancel", map[string]any{"sessionId": sessionID})
+}
+
+func (c *Client) currentModelID() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return strings.TrimSpace(c.modelID)
+}
+
+func (c *Client) setModelID(modelID string) {
+	c.mu.Lock()
+	c.modelID = strings.TrimSpace(modelID)
+	c.mu.Unlock()
+}
+
+func (c *Client) currentConfigOverrides() map[string]string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return cloneConfigOverrides(c.configOverrides)
+}
+
+func (c *Client) setConfigOverride(configID, value string) {
+	configID = strings.TrimSpace(configID)
+	if configID == "" || strings.EqualFold(configID, "model") {
+		return
+	}
+	value = strings.TrimSpace(value)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if value == "" {
+		delete(c.configOverrides, configID)
+		return
+	}
+	if c.configOverrides == nil {
+		c.configOverrides = make(map[string]string)
+	}
+	c.configOverrides[configID] = value
+}
+
+func (c *Client) runConfigSession(
+	ctx context.Context,
+	modelID string,
+	configOverrides map[string]string,
+	configID, value string,
+) ([]agents.ConfigOption, error) {
+	cliHome, err := makeCLIHome()
+	if err != nil {
+		return nil, fmt.Errorf("gemini: config options create CLI home: %w", err)
+	}
+	defer os.RemoveAll(cliHome)
+
+	cmd := exec.Command("gemini", "--experimental-acp")
+	cmd.Env = buildGeminiCLIEnv(cliHome)
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("gemini: config options open stdin pipe: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("gemini: config options open stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("gemini: config options open stderr pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("gemini: config options start process: %w", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() { _, _ = io.Copy(io.Discard, stderr) }()
+	go func() { errCh <- cmd.Wait() }()
+
+	conn := newRPCConn(stdin, stdout)
+	defer conn.Close()
+	defer terminateProcess(cmd, errCh)
+
+	if _, err := conn.Call(ctx, "initialize", map[string]any{
+		"protocolVersion": 1,
+		"clientCapabilities": map[string]any{
+			"fs": map[string]any{
+				"readTextFile":  false,
+				"writeTextFile": false,
+			},
+		},
+	}); err != nil {
+		return nil, fmt.Errorf("gemini: config options initialize: %w", err)
+	}
+
+	newParams := map[string]any{
+		"cwd":        c.dir,
+		"mcpServers": []any{},
+	}
+	if modelID != "" {
+		newParams["model"] = modelID
+		newParams["modelId"] = modelID
+	}
+	newResult, err := conn.Call(ctx, "session/new", newParams)
+	if err != nil {
+		return nil, fmt.Errorf("gemini: config options session/new: %w", err)
+	}
+	sessionID := parseSessionID(newResult)
+	if sessionID == "" {
+		return nil, errors.New("gemini: config options session/new returned empty sessionId")
+	}
+
+	options, err := c.applyConfigOverrides(ctx, conn, sessionID, acpmodel.ExtractConfigOptions(newResult), configOverrides)
+	if err != nil {
+		return nil, err
+	}
+	if configID == "" {
+		return options, nil
+	}
+	setResult, err := conn.Call(ctx, methodSessionSetConfigOption, map[string]any{
+		"sessionId": sessionID,
+		"configId":  configID,
+		"value":     value,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gemini: config options session/set_config_option: %w", err)
+	}
+
+	updated := acpmodel.ExtractConfigOptions(setResult)
+	if len(updated) == 0 {
+		return options, nil
+	}
+	return updated, nil
+}
+
+func (c *Client) applyConfigOverrides(
+	ctx context.Context,
+	conn *rpcConn,
+	sessionID string,
+	options []agents.ConfigOption,
+	overrides map[string]string,
+) ([]agents.ConfigOption, error) {
+	if len(overrides) == 0 {
+		return options, nil
+	}
+
+	configIDs := make([]string, 0, len(overrides))
+	for configID := range overrides {
+		configIDs = append(configIDs, configID)
+	}
+	sort.Strings(configIDs)
+
+	current := options
+	for _, configID := range configIDs {
+		value := strings.TrimSpace(overrides[configID])
+		if value == "" {
+			continue
+		}
+		setResult, err := conn.Call(ctx, methodSessionSetConfigOption, map[string]any{
+			"sessionId": sessionID,
+			"configId":  configID,
+			"value":     value,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("gemini: session/set_config_option(%s): %w", configID, err)
+		}
+		if updated := acpmodel.ExtractConfigOptions(setResult); len(updated) > 0 {
+			current = updated
+		}
+	}
+	return current, nil
+}
+
+func normalizeConfigOverrides(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	normalized := make(map[string]string, len(input))
+	for rawID, rawValue := range input {
+		configID := strings.TrimSpace(rawID)
+		value := strings.TrimSpace(rawValue)
+		if configID == "" || value == "" || strings.EqualFold(configID, "model") {
+			continue
+		}
+		normalized[configID] = value
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func cloneConfigOverrides(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(input))
+	for configID, value := range input {
+		cloned[configID] = value
+	}
+	return cloned
 }
 
 // buildPermResponse constructs a RequestPermissionResponse for the given optionId.
@@ -299,29 +573,32 @@ func makeCLIHome() (string, error) {
 
 // readUserAuthType determines the auth type to configure in the temporary
 // GEMINI_CLI_HOME. Priority:
-//  1. If GEMINI_API_KEY is present in the environment, use "gemini-api-key".
-//  2. Otherwise read security.auth.selectedType from ~/.gemini/settings.json.
+//  1. Use ~/.gemini/settings.json explicit selection when present.
+//  2. Otherwise, if GEMINI_API_KEY is present in env, use "gemini-api-key".
 //  3. Fall back to "oauth-personal" (the default `gemini auth login` flow).
 func readUserAuthType(geminiDir string) string {
+	data, err := os.ReadFile(filepath.Join(geminiDir, "settings.json"))
+	if err == nil {
+		var cfg struct {
+			SelectedAuthType string `json:"selectedAuthType"`
+			Security         struct {
+				Auth struct {
+					SelectedType string `json:"selectedType"`
+				} `json:"auth"`
+			} `json:"security"`
+		}
+		if err := json.Unmarshal(data, &cfg); err == nil {
+			if t := strings.TrimSpace(cfg.Security.Auth.SelectedType); t != "" {
+				return t
+			}
+			if t := strings.TrimSpace(cfg.SelectedAuthType); t != "" {
+				return t
+			}
+		}
+	}
+
 	if os.Getenv("GEMINI_API_KEY") != "" {
 		return "gemini-api-key"
-	}
-	data, err := os.ReadFile(filepath.Join(geminiDir, "settings.json"))
-	if err != nil {
-		return "oauth-personal"
-	}
-	var cfg struct {
-		Security struct {
-			Auth struct {
-				SelectedType string `json:"selectedType"`
-			} `json:"auth"`
-		} `json:"security"`
-	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return "oauth-personal"
-	}
-	if t := strings.TrimSpace(cfg.Security.Auth.SelectedType); t != "" {
-		return t
 	}
 	return "oauth-personal"
 }
@@ -354,6 +631,15 @@ func appendOrReplace(env []string, key, value string) []string {
 		}
 	}
 	return append(result, prefix+value)
+}
+
+func buildGeminiCLIEnv(cliHome string) []string {
+	env := appendOrReplace(os.Environ(), "GEMINI_CLI_HOME", cliHome)
+	// Keep endpoint routing deterministic: explicit parent env must win.
+	if value, ok := os.LookupEnv("GOOGLE_GEMINI_BASE_URL"); ok {
+		env = appendOrReplace(env, "GOOGLE_GEMINI_BASE_URL", value)
+	}
+	return env
 }
 
 // ── JSON-RPC 2.0 transport ──────────────────────────────────────────────────

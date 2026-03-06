@@ -156,6 +156,58 @@ This checklist defines executable acceptance checks for requirements 1-16.
   - `go test ./internal/httpapi -run TestDeleteThread -count=1`
   - `cd internal/webui/web && npm run build`
 
+## Requirement 18: Thread Model Selection and Switching
+
+- Operation:
+  - query agent model catalog via `GET /v1/agents/{agentId}/models`.
+  - create thread with `agentOptions.modelId`.
+  - update existing thread model via `PATCH /v1/threads/{threadId}`.
+  - verify active-turn conflict and provider cache refresh behavior.
+- Expected:
+  - model catalog endpoint returns ACP-reported provider model options for each built-in agent.
+  - thread create/list/get payload includes persisted `agentOptions.modelId`.
+  - thread update persists model override and returns updated thread payload.
+  - updating while turn is active returns `409 CONFLICT`.
+  - successful update closes cached thread provider so next turn uses new model config.
+- Verification commands (executed 2026-03-05):
+  - `go test ./internal/httpapi -run TestV1AgentModels -count=1`
+  - `go test ./internal/agents/acpmodel -count=1`
+  - `go test ./internal/storage -run TestUpdateThreadAgentOptions -count=1`
+  - `go test ./internal/httpapi -run TestUpdateThreadAgentOptions -count=1`
+  - `go test ./internal/httpapi -run TestUpdateThreadConflictWhenActiveTurn -count=1`
+  - `go test ./internal/httpapi -run TestUpdateThreadClosesCachedAgent -count=1`
+  - `cd internal/webui/web && npm run build`
+
+## Requirement 19: Thread Session Config Options (Model + Reasoning)
+
+- Operation:
+  - open/create a thread, query `GET /v1/threads/{threadId}/config-options`.
+  - confirm response includes `configOptions` and model/reasoning-style options use ACP `currentValue` + `options`.
+  - switch model through `POST /v1/threads/{threadId}/config-options` with `{configId:"model", value:"..."}`.
+  - switch a non-model config option (for example reasoning) through the same endpoint.
+  - verify persistence of `agentOptions.modelId` and `agentOptions.configOverrides` for subsequent turns/restarts.
+  - verify Web UI composer footer shows both `Model` and `Reasoning`, applies on selection (no Apply button), and refreshes reasoning choices after model changes.
+- Expected:
+  - model selector data source is thread-level ACP `configOptions` (`category=model` / `id=model`).
+  - reasoning selector data source is thread-level ACP `configOptions` (`category=reasoning`).
+  - selected model changes immediately via ACP `session/set_config_option`.
+  - returned and persisted current values stay consistent:
+    - `configOptions.model.currentValue` == thread `agentOptions.modelId`
+    - non-model current values are mirrored into `thread.agentOptions.configOverrides`
+  - normalized model/reasoning catalogs are persisted in sqlite and reused after service restart.
+  - startup refresh of persisted catalogs happens asynchronously in the background and does not block frontend/API availability.
+  - same-agent threads do not share selected current values, but can reuse the same stored catalog data for the same selected model.
+  - active turn mutation is rejected with `409 CONFLICT`.
+- Verification commands (executed 2026-03-06):
+  - `go test ./internal/httpapi -run TestThreadConfigOptions -count=1`
+  - `go test ./internal/httpapi -run TestThreadConfigOptionsPersistConfigOverrides -count=1`
+  - `go test ./internal/httpapi -run TestV1AgentModelsUsesStoredCatalog -count=1`
+  - `go test ./internal/agents/acpmodel -count=1`
+  - `go test ./cmd/agent-hub-server -run TestAgentConfigCatalogRefresher -count=1`
+  - `go test ./cmd/agent-hub-server -run TestExtractConfigOverrides -count=1`
+  - `cd internal/webui/web && npm run build`
+  - `go test ./...`
+
 ## Current Acceptance Result (Integration Update, 2026-03-03)
 
 - Scope: qwen provider implementation + server wiring + test coverage.

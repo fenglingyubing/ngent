@@ -27,6 +27,9 @@
 - ADR-023: Shared ACP stdio transport for OpenCode and Qwen providers. (Accepted)
 - ADR-024: Claude Code embedded provider via claudeacp runtime. (Accepted)
 - ADR-025: Hard-delete thread endpoint with active-turn lock. (Accepted)
+- ADR-026: Thread-level model override update API and provider reset. (Accepted)
+- ADR-027: ACP-backed agent model catalog endpoint and UI dropdown wiring. (Accepted)
+- ADR-028: Persist thread config overrides and surface reasoning control in Web UI. (Accepted)
 
 ## ADR-018: Embedded Web UI via Go embed
 
@@ -58,6 +61,66 @@
 - Consequences: deletion is deterministic and race-safe with active turn startup, but remains irreversible (no soft-delete/recover endpoint).
 - Alternatives considered: soft-delete tombstone model, relying only on foreign-key cascades, and best-effort delete without turn-controller lock.
 - Follow-up actions: add optional audit trail for delete operations if compliance requirements increase.
+
+## ADR-028: Persist Thread Config Overrides and Surface Reasoning Control in Web UI
+
+- Status: Accepted
+- Date: 2026-03-06
+- Context:
+  - thread-scoped `config-options` support already enabled immediate model switching, but non-model settings like reasoning only lived inside the current ACP session.
+  - for stdio providers (`opencode`, `qwen`, `gemini`), a reasoning change would otherwise disappear on the next turn because each turn starts a fresh ACP process.
+  - Web UI only surfaced model in the composer footer, even though ACP can report model-specific reasoning choices in the same `configOptions` payload.
+- Decision:
+  - persist non-model current values returned by `POST /v1/threads/{threadId}/config-options` into `agentOptions.configOverrides`.
+  - keep `agentOptions.modelId` as the durable model mirror, and store other current config values by config id in `configOverrides`.
+  - update all built-in providers to reapply persisted non-model overrides on new ACP sessions:
+    - embedded (`codex`, `claude`) reapply overrides after `session/new` on cached runtime initialization.
+    - stdio (`opencode`, `qwen`, `gemini`) reapply overrides after `session/new` before `session/prompt`.
+  - extend the Web UI composer footer to show both `Model` and `Reasoning` controls sourced from thread `configOptions`, with reasoning options refreshed after model changes.
+  - cache config catalogs in the Web UI by agent id so same-agent threads reuse one shared model/reasoning option list without re-querying on every thread switch.
+- Consequences:
+  - reasoning-style settings now survive across future turns and restart/provider reinitialization boundaries.
+  - reasoning remains model-specific because the UI always redraws from the latest ACP-reported thread config options after model changes.
+  - switching between threads on the same agent is cheaper because the UI reuses the cached agent catalog and only applies thread-specific current values locally.
+  - other non-model config categories are persisted server-side but are not yet surfaced as first-class UI controls beyond reasoning.
+- Alternatives considered:
+  - UI-only reasoning selector without persistence.
+  - provider-specific persistence logic for reasoning rather than generic thread config override storage.
+- Follow-up actions:
+  - evaluate surfacing additional ACP config categories in the UI when product requirements justify more advanced controls.
+
+## ADR-026: Thread-level Model Override Update API and Provider Reset
+
+- Status: Accepted
+- Date: 2026-03-05
+- Context: users need to choose model at thread creation time and switch model on existing threads from Web UI/API without breaking one-active-turn-per-thread guarantees.
+- Decision:
+  - standardize thread-level model override as `agentOptions.modelId`.
+  - add `PATCH /v1/threads/{threadId}` to update `agentOptions` for owned threads.
+  - reject updates with `409 CONFLICT` while the thread has an active turn.
+  - close cached per-thread provider after successful update so next turn re-initializes provider/session with new model config.
+  - wire `modelId` into all provider factories; embedded `codex`/`claude` pass it to ACP `session/new` as `model`; `gemini` passes it to `session/new` and `session/prompt`; `opencode` passes `modelId` in `session/prompt`; `qwen` passes `model` in `session/prompt`.
+- Consequences: model switching becomes explicit and deterministic at thread boundary; switching takes effect on next turn (not mid-turn) and may incur one provider re-init.
+- Alternatives considered: in-session mutable model switching without provider reset, and provider-specific update endpoints.
+- Follow-up actions: expose optional model catalogs per agent for richer dropdown UX and validate model ids against runtime-reported config options when available.
+
+## ADR-027: ACP-backed Agent Model Catalog Endpoint and UI Dropdown Wiring
+
+- Status: Accepted
+- Date: 2026-03-05
+- Context: Web UI hardcoded model lists drift from runtime reality; users need model options sourced directly from each agent's ACP runtime so create/switch flows stay accurate across codex/claude/opencode/gemini/qwen.
+- Decision:
+  - add `GET /v1/agents/{agentId}/models` and wire it to a backend `AgentModelsFactory`.
+  - implement per-agent ACP discovery handshake (`initialize` + `session/new`) and parse model options from:
+    - `session/new.configOptions` (`id=model`) for embedded codex/claude (acp-adapter latest).
+    - `session/new.models.availableModels` for opencode/gemini/qwen.
+  - normalize response shape to `[{id,name}]`, de-duplicate by `id`, and return `503 UPSTREAM_UNAVAILABLE` on discovery failure.
+  - replace active-thread free-text model control with dropdown powered by the new endpoint:
+    - active-thread header switches via dropdown + `PATCH /v1/threads/{threadId}`.
+  - keep new-thread modal focused on agent/cwd/title creation and advanced JSON (no dedicated model selector).
+- Consequences: model selection UX is runtime-accurate and provider-specific without frontend hardcoding; failure mode is explicit (upstream unavailable) and localized to model discovery.
+- Alternatives considered: keep hardcoded frontend catalogs, or validate only at prompt-time without exposing a catalog endpoint.
+- Follow-up actions: optionally add short-lived server-side model catalog cache and server-side create/update validation against discovered options.
 
 ## ADR Template
 
@@ -263,7 +326,7 @@ Use this template for new decisions.
 - Date: 2026-02-28
 - Context: sidecar mode required user-facing binary path configuration (`--codex-acp-go-bin`) and made deployment ergonomics/error modes depend on path wiring.
 - Decision:
-  - replace codex turn execution from external `codex-acp-go` process spawning to in-process `github.com/beyond5959/acp-adapter/pkg/acpadapter` embedded runtime.
+  - replace codex turn execution from external `codex-acp-go` process spawning to in-process `github.com/beyond5959/acp-adapter/pkg/codexacp` embedded runtime.
   - remove user-facing codex binary path flags; server now links acp-adapter library directly.
   - keep lazy startup and per-thread isolation by creating one embedded runtime per thread provider on first turn.
   - keep existing HTTP/SSE/permission/history contracts unchanged; permission round-trip remains fail-closed.
@@ -430,7 +493,7 @@ Use this template for new decisions.
 - Date: 2026-03-03
 - Context:
   - Claude Code is the primary Anthropic coding agent; it was listed as a planned provider (`🔜`) since project inception.
-  - `github.com/beyond5959/acp-adapter` already contained a complete parallel `pkg/claudeacp` package with identical API surface to `pkg/acpadapter`; no new library dependency was needed.
+  - `github.com/beyond5959/acp-adapter` already contained a complete parallel `pkg/claudeacp` package with identical API surface to `pkg/codexacp`; no new library dependency was needed.
   - Preflight for Claude does not require a binary path check — availability is determined entirely by the presence of `ANTHROPIC_AUTH_TOKEN` in the environment.
 - Decision:
   - implement `internal/agents/claude` as an embedded provider package mirroring `internal/agents/codex`.
@@ -448,3 +511,61 @@ Use this template for new decisions.
 - Follow-up actions:
   - publish `acp-adapter` with `pkg/claudeacp` to a versioned tag and remove the `replace` directive from `go.mod`.
   - add permission round-trip E2E test for Claude (approved/declined/cancelled paths).
+
+## ADR-025: Thread-level model switching via ACP session config options
+
+- Status: Accepted
+- Date: 2026-03-05
+- Context:
+  - model switching previously used thread metadata patch (`PATCH /v1/threads/{threadId}` with `agentOptions.modelId`) and recreated provider state, while ACP now standardizes runtime config through `session/new.configOptions` + `session/set_config_option`.
+  - Web UI requirement is immediate switch on model select (no extra apply action), and model list/selected value must come from ACP session config data (including per-model descriptions).
+- Decision:
+  - add thread-scoped config option endpoints:
+    - `GET /v1/threads/{threadId}/config-options`
+    - `POST /v1/threads/{threadId}/config-options` (`configId`, `value`)
+  - `POST` applies changes through provider `SetConfigOption`, backed by ACP `session/set_config_option`.
+  - support `ConfigOptionManager` on all built-in providers:
+    - embedded (`codex`, `claude`): mutate cached session in-place.
+    - stdio (`opencode`, `qwen`, `gemini`): perform ACP handshake/apply flow and persist resulting model id for subsequent turns.
+  - keep `agentOptions.modelId` as durable thread metadata mirror when `configId=model` succeeds.
+  - Web UI model selector is bound to thread-level `configOptions` model option and applies immediately on `change`.
+- Consequences:
+  - model UX is consistent with ACP protocol semantics and no longer depends on separate apply state.
+  - per-option descriptions are available to UI and rendered beneath selector.
+  - active-turn safety remains strict (`409` on config mutation while turn is active).
+- Alternatives considered:
+  - continue using thread patch only and skip ACP `session/set_config_option`.
+  - expose only agent-level model catalog and infer current model from local metadata.
+- Follow-up actions:
+  - optionally add richer Web UI rendering for non-model config categories (e.g. reasoning level) using the same API.
+
+## ADR-026: Persist agent config catalogs in SQLite and refresh them asynchronously on startup
+
+- Status: Accepted
+- Date: 2026-03-06
+- Context:
+  - thread config UX now depends on ACP `configOptions`, especially model-specific reasoning choices.
+  - querying live providers on every thread switch is unnecessary and becomes user-visible after server restart because model/reasoning catalogs are metadata, not per-turn output.
+  - different threads on the same agent can keep different selected model/reasoning values, while still reusing the same underlying catalog data.
+- Decision:
+  - add sqlite table `agent_config_catalogs(agent_id, model_id, config_options_json, updated_at)` and persist normalized ACP config-options snapshots there.
+  - keep per-thread selected values in `threads.agent_options_json`:
+    - `modelId`
+    - `configOverrides`
+  - read path:
+    - `GET /v1/threads/{threadId}/config-options` first loads the stored catalog row for the thread's selected model (or a reserved default snapshot when no model is selected yet), then overlays the thread's own selected current values.
+    - `GET /v1/agents/{agentId}/models` derives model list from stored catalogs before falling back to live discovery.
+  - write path:
+    - `POST /v1/threads/{threadId}/config-options` still mutates the live provider/session, then persists both thread selection state and the current model's returned config-options snapshot.
+  - startup behavior:
+    - launch a background refresher goroutine after server initialization.
+    - refresher queries default + per-model config catalogs for built-in agents and updates sqlite without delaying HTTP startup or blocking frontend requests.
+    - on partial refresh failure, keep previously stored rows for models that could not be refreshed instead of deleting them.
+- Consequences:
+  - restart no longer forces frontend-visible catalog discovery in the common case; stored model/reasoning metadata remains immediately available.
+  - reasoning lists remain model-specific while thread-selected current values stay isolated per thread.
+  - partial refresh strategy trades perfect freshness for availability and catalog continuity.
+- Alternatives considered:
+  - keep catalogs only in frontend memory and re-query on restart.
+  - store only an agent-level flat reasoning list (rejected because reasoning is model-dependent).
+  - block startup until all agents refresh live catalogs (rejected because it would directly impact frontend responsiveness).

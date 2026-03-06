@@ -120,3 +120,39 @@
 - Symptom: deleting a thread permanently removes its thread/turn/event history and cannot be restored through server APIs.
 - Workaround: export needed history before delete.
 - Follow-up plan: evaluate optional soft-delete retention window and admin-only restore endpoint if product requirements demand recoverability.
+
+- ID: KI-012
+- Title: Model override id is accepted as free text
+- Status: Open
+- Severity: Low
+- Affects: thread create/update flows using `agentOptions.modelId`
+- Symptom: direct API clients can still submit any `modelId`; unsupported values fail later during provider/runtime execution instead of being rejected at create/update time.
+- Workaround: query `GET /v1/agents/{agentId}/models` first, then submit a returned model id (or omit `modelId` to use provider default model).
+- Follow-up plan: add optional server-side validation in create/update path against runtime-discovered model catalogs.
+
+- ID: KI-013
+- Title: Stdio providers apply config in transient ACP sessions
+- Status: Open
+- Severity: Low
+- Affects: `opencode` / `qwen` / `gemini` thread config behavior
+- Symptom: these providers are process-per-turn; config changes are mirrored into persisted thread metadata (`agentOptions.modelId` + `agentOptions.configOverrides`) and reapplied on the next ACP session, but there is still no long-lived runtime session to mutate between turns.
+- Workaround: none required for normal usage; persisted config selections remain effective on future turns through thread metadata replay.
+- Follow-up plan: evaluate persistent per-thread ACP runtime for stdio agents if future product requirements need truly in-session config mutations beyond thread-level replay.
+
+- ID: KI-014
+- Title: Web UI surfaces only model and reasoning config controls
+- Status: Open
+- Severity: Low
+- Affects: advanced ACP config categories beyond `model` and `reasoning`
+- Symptom: thread `configOptions` can contain additional categories/ids, but the composer footer currently exposes first-class controls only for model and reasoning.
+- Workaround: use `GET/POST /v1/threads/{threadId}/config-options` directly to inspect and update other ACP config options.
+- Follow-up plan: add a generic advanced-config surface in the Web UI if users need broader access to ACP session settings.
+
+- ID: KI-015
+- Title: Partial startup refresh keeps stale catalog rows for failed models
+- Status: Open
+- Severity: Low
+- Affects: persisted `agent_config_catalogs` when startup background refresh succeeds for some models but fails for others
+- Symptom: on partial refresh failure, the server intentionally keeps older sqlite catalog rows for models that could not be refreshed, so removed/changed upstream model metadata can remain temporarily stale until a later successful refresh or an explicit config change rewrites that model row.
+- Workaround: restart again after upstream/provider health is restored, or trigger a config change on the affected model/thread so the latest snapshot is written through immediately.
+- Follow-up plan: evaluate adding per-agent refresh status/age diagnostics in the API or Web UI so operators can see when catalog data is partially stale.
