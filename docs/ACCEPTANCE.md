@@ -63,15 +63,15 @@ This checklist defines executable acceptance checks for requirements 1-16.
 - Operation: validate listen address policy with/without allow-public.
 - Expected: non-loopback bind is allowed by default; `--allow-public=false` restricts to loopback only.
 - Verification command:
-  - `go test ./cmd/agent-hub-server -run TestValidateListenAddr -count=1`
+  - `go test ./cmd/ngent -run TestValidateListenAddr -count=1`
 
 ## Requirement 9: Startup logging contract
 
 - Operation: start server and inspect startup output on stderr.
 - Expected: startup output is multi-line, human-readable, includes a QR code (when public bind is enabled), and prints the service port + a concrete URL under the QR code.
 - Verification command:
-  - `go test ./cmd/agent-hub-server -count=1`
-  - manual run: `go run ./cmd/agent-hub-server`
+  - `go test ./cmd/ngent -count=1`
+  - manual run: `go run ./cmd/ngent`
 
 ## Requirement 10: Unified errors and structured logs
 
@@ -96,7 +96,7 @@ This checklist defines executable acceptance checks for requirements 1-16.
 - Expected: idle thread agent is reclaimed and closed; shutdown force-cancels active turns on timeout.
 - Verification command:
   - `go test ./internal/httpapi -run TestAgentIdleTTLReclaimsThreadAgent -count=1`
-  - `go test ./cmd/agent-hub-server -run TestGracefulShutdownForceCancelsTurns -count=1`
+  - `go test ./cmd/ngent -run TestGracefulShutdownForceCancelsTurns -count=1`
 
 ## Requirement 13: Embedded Web UI
 
@@ -142,7 +142,7 @@ This checklist defines executable acceptance checks for requirements 1-16.
   - `qwen --version` (pass, `0.11.0`)
   - `go test ./internal/agents/qwen -count=1` (pass)
   - `E2E_QWEN=1 go test ./internal/agents/qwen -run TestQwenE2ESmoke -v -timeout 120s` (pass, real prompt returns `PONG`)
-  - `go test ./cmd/agent-hub-server ./internal/httpapi -count=1` (pass)
+  - `go test ./cmd/ngent ./internal/httpapi -count=1` (pass)
 
 ## Requirement 17: Thread Delete Lifecycle
 
@@ -204,8 +204,8 @@ This checklist defines executable acceptance checks for requirements 1-16.
   - `go test ./internal/httpapi -run TestThreadConfigOptionsPersistConfigOverrides -count=1`
   - `go test ./internal/httpapi -run TestV1AgentModelsUsesStoredCatalog -count=1`
   - `go test ./internal/agents/acpmodel -count=1`
-  - `go test ./cmd/agent-hub-server -run TestAgentConfigCatalogRefresher -count=1`
-  - `go test ./cmd/agent-hub-server -run TestExtractConfigOverrides -count=1`
+  - `go test ./cmd/ngent -run TestAgentConfigCatalogRefresher -count=1`
+  - `go test ./cmd/ngent -run TestExtractConfigOverrides -count=1`
   - `cd internal/webui/web && npm run build`
   - `go test ./...`
 

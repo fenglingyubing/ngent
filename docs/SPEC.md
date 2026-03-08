@@ -168,7 +168,7 @@ and upstream ACP schema:
   - `Client.Stream()` uses process-per-turn ACP stdio flow.
 - keep implementation additive:
   - do not refactor shared `internal/agents/acp` or existing providers.
-- main wiring in `cmd/agent-hub-server/main.go`:
+- main wiring in `cmd/ngent/main.go`:
   - qwen preflight and status in `/v1/agents`.
   - add `qwen` to `AllowedAgentIDs`.
   - add `TurnAgentFactory` case for `thread.AgentID == "qwen"`.

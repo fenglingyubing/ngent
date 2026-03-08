@@ -133,7 +133,7 @@ func (c *Client) Stream(ctx context.Context, input string, onDelta func(delta st
 
 	if _, err := conn.Call(ctx, "initialize", map[string]any{
 		"client": map[string]any{
-			"name": "code-agent-hub-server",
+			"name": "ngent",
 		},
 	}); err != nil {
 		return agents.StopReasonEndTurn, fmt.Errorf("acp: initialize failed: %w", err)

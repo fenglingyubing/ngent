@@ -160,7 +160,7 @@ func (c *Client) Stream(ctx context.Context, input string, onDelta func(delta st
 	// 1. initialize — protocolVersion must be an integer.
 	if _, err := conn.Call(ctx, "initialize", map[string]any{
 		"clientInfo": map[string]any{
-			"name":    "agent-hub-server",
+			"name":    "ngent",
 			"version": "0.1.0",
 		},
 		"protocolVersion": 1,
@@ -313,7 +313,7 @@ func (c *Client) runConfigSession(
 
 	if _, err := conn.Call(ctx, "initialize", map[string]any{
 		"clientInfo": map[string]any{
-			"name":    "agent-hub-server",
+			"name":    "ngent",
 			"version": "0.1.0",
 		},
 		"protocolVersion": 1,

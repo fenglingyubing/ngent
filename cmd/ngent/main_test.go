@@ -478,7 +478,7 @@ func TestPrintStartupSummary(t *testing.T) {
 		}
 	}
 
-	for _, notWant := range []string{"Time:", "DB:", "Agents:", "Help:", "agent-hub-server --help", "HTTP:", "Web:", "LAN:"} {
+	for _, notWant := range []string{"Time:", "DB:", "Agents:", "Help:", "ngent --help", "HTTP:", "Web:", "LAN:"} {
 		if strings.Contains(text, notWant) {
 			t.Fatalf("startup summary unexpectedly contains %q; got:\n%s", notWant, text)
 		}

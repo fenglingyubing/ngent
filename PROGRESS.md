@@ -116,7 +116,7 @@ This file is the source of milestone progress, validation commands, and next act
   - executed validation:
     - pass: `qwen --version` (`0.11.0`)
     - pass: `go test ./internal/agents/qwen -count=1`
-    - pass: `go test ./cmd/agent-hub-server ./internal/httpapi -count=1`
+    - pass: `go test ./cmd/ngent ./internal/httpapi -count=1`
     - pass: `E2E_QWEN=1 go test ./internal/agents/qwen -run TestQwenE2ESmoke -v -timeout 120s`
 - `Post-M8` ACP stdio transport refactor completed:
   - extracted shared transport package `internal/agents/acpstdio` (JSON-RPC stdio call/notify, inbound request handling, parse helpers, process termination helper).
@@ -285,7 +285,7 @@ This file is the source of milestone progress, validation commands, and next act
   - `qwen --version`
   - `go test ./internal/agents/qwen -count=1`
   - `E2E_QWEN=1 go test ./internal/agents/qwen -run TestQwenE2ESmoke -v -timeout 120s`
-  - `go test ./cmd/agent-hub-server ./internal/httpapi -count=1`
+  - `go test ./cmd/ngent ./internal/httpapi -count=1`
   - `go test ./...`
 - Result:
   - opencode/qwen package tests: pass

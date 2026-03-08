@@ -53,7 +53,7 @@ func DiscoverModels(ctx context.Context, cfg Config) ([]agents.ModelOption, erro
 
 	if _, err := conn.Call(ctx, "initialize", map[string]any{
 		"clientInfo": map[string]any{
-			"name":    "agent-hub-server",
+			"name":    "ngent",
 			"version": "0.1.0",
 		},
 		"protocolVersion": 1,
