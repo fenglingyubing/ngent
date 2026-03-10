@@ -18,64 +18,69 @@ import (
 	"github.com/beyond5959/ngent/internal/storage"
 )
 
-func TestValidateListenAddr(t *testing.T) {
+func TestResolveListenAddr(t *testing.T) {
 	tests := []struct {
-		name        string
-		listenAddr  string
-		allowPublic bool
-		wantErr     bool
-		wantPort    int
+		name           string
+		port           int
+		allowPublic    bool
+		wantErr        bool
+		wantPort       int
+		wantListenAddr string
 	}{
 		{
-			name:        "loopback_allowed_when_public_disabled",
-			listenAddr:  "127.0.0.1:8686",
-			allowPublic: false,
-			wantErr:     false,
-			wantPort:    8686,
+			name:           "loopback_when_public_disabled",
+			port:           8686,
+			allowPublic:    false,
+			wantErr:        false,
+			wantPort:       8686,
+			wantListenAddr: "127.0.0.1:8686",
 		},
 		{
-			name:        "localhost_allowed",
-			listenAddr:  "localhost:8080",
-			allowPublic: false,
-			wantErr:     false,
-			wantPort:    8080,
+			name:           "public_when_public_enabled",
+			port:           8686,
+			allowPublic:    true,
+			wantErr:        false,
+			wantPort:       8686,
+			wantListenAddr: "0.0.0.0:8686",
 		},
 		{
-			name:        "public_ipv4_denied_when_public_disabled",
-			listenAddr:  "0.0.0.0:8686",
-			allowPublic: false,
-			wantErr:     true,
-		},
-		{
-			name:        "public_ipv6_denied_when_public_disabled",
-			listenAddr:  "[::]:8686",
+			name:        "invalid_port_zero",
+			port:        0,
 			allowPublic: false,
 			wantErr:     true,
 		},
 		{
-			name:        "public_ipv4_allowed_when_public_enabled",
-			listenAddr:  "0.0.0.0:8686",
-			allowPublic: true,
-			wantErr:     false,
-			wantPort:    8686,
+			name:        "invalid_port_too_high",
+			port:        65536,
+			allowPublic: false,
+			wantErr:     true,
+		},
+		{
+			name:        "invalid_port_negative",
+			port:        -1,
+			allowPublic: false,
+			wantErr:     true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, gotPort, err := validateListenAddr(tt.listenAddr, tt.allowPublic)
+			gotListenAddr, gotPort, err := resolveListenAddr(tt.port, tt.allowPublic)
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("validateListenAddr(%q, %v) error = nil, want non-nil", tt.listenAddr, tt.allowPublic)
+					t.Fatalf("resolveListenAddr(%d, %v) error = nil, want non-nil", tt.port, tt.allowPublic)
 				}
 				return
 			}
 
 			if err != nil {
-				t.Fatalf("validateListenAddr(%q, %v) unexpected error: %v", tt.listenAddr, tt.allowPublic, err)
+				t.Fatalf("resolveListenAddr(%d, %v) unexpected error: %v", tt.port, tt.allowPublic, err)
 			}
 			if gotPort != tt.wantPort {
 				t.Fatalf("port = %d, want %d", gotPort, tt.wantPort)
+			}
+			if gotListenAddr != tt.wantListenAddr {
+				t.Fatalf("listenAddr = %q, want %q", gotListenAddr, tt.wantListenAddr)
 			}
 		})
 	}
@@ -420,7 +425,7 @@ func TestResolveDefaultDBPath(t *testing.T) {
 		t.Fatalf("resolveDefaultDBPath() unexpected error: %v", err)
 	}
 
-	want := filepath.Join(home, ".go-agent-server", "agent-hub.db")
+	want := filepath.Join(home, ".ngent", "ngent.db")
 	if got != want {
 		t.Fatalf("resolveDefaultDBPath() = %q, want %q", got, want)
 	}
@@ -429,7 +434,7 @@ func TestResolveDefaultDBPath(t *testing.T) {
 func TestEnsureDBPathParent(t *testing.T) {
 	t.Run("create nested parent dir", func(t *testing.T) {
 		tmp := t.TempDir()
-		dbPath := filepath.Join(tmp, "nested", "dir", "agent-hub.db")
+		dbPath := filepath.Join(tmp, "nested", "dir", "ngent.db")
 		if err := ensureDBPathParent(dbPath); err != nil {
 			t.Fatalf("ensureDBPathParent(%q) unexpected error: %v", dbPath, err)
 		}
@@ -475,34 +480,20 @@ func TestGracefulShutdownForceCancelsTurns(t *testing.T) {
 	}
 }
 
-func TestPrintStartupSummary(t *testing.T) {
-	var out bytes.Buffer
-	startedAt := time.Date(2026, time.February, 28, 18, 1, 2, 0, time.FixedZone("UTC+8", 8*3600))
-	printStartupSummary(&out, startedAt)
-
-	text := out.String()
-	checks := []string{
-		"Agent Hub Server started",
+func TestGetLANURLReturnsFalseForLoopback(t *testing.T) {
+	url, ok := getLANURL("127.0.0.1:8686")
+	if ok {
+		t.Fatalf("getLANURL should return false for loopback")
 	}
-	for _, want := range checks {
-		if !strings.Contains(text, want) {
-			t.Fatalf("startup summary missing %q; got:\n%s", want, text)
-		}
-	}
-
-	for _, notWant := range []string{"Time:", "DB:", "Agents:", "Help:", "ngent --help", "HTTP:", "Web:", "LAN:"} {
-		if strings.Contains(text, notWant) {
-			t.Fatalf("startup summary unexpectedly contains %q; got:\n%s", notWant, text)
-		}
+	if url != "" {
+		t.Fatalf("expected empty URL for loopback, got %q", url)
 	}
 }
 
-func TestPrintLANQRCodeDoesNotPrintURLOrLabels(t *testing.T) {
+func TestPrintQRCodeDoesNothingForEmptyURL(t *testing.T) {
 	var out bytes.Buffer
-	if _, ok := printLANQRCode(&out, "127.0.0.1:8686"); ok {
-		t.Fatalf("printLANQRCode should be a no-op on loopback")
-	}
+	printQRCode(&out, "")
 	if got := out.String(); got != "" {
-		t.Fatalf("printLANQRCode unexpectedly wrote output for loopback:\n%s", got)
+		t.Fatalf("printQRCode should write nothing for empty URL, got:\n%s", got)
 	}
 }
