@@ -37,7 +37,97 @@
 - ADR-033: Surface ACP plan updates as first-class SSE and Web UI state. (Accepted)
 - ADR-034: Source Kimi config catalogs from local config to avoid empty sessions. (Accepted)
 - ADR-035: Add opt-in ACP debug tracing behind `--debug`. (Accepted)
-- ADR-036: Persist stable Codex session ids and normalize Codex transcript replay. (Accepted)
+- ADR-036: Persist stable Codex session ids and normalize Codex transcript replay. (Superseded)
+- ADR-037: Replay Kimi session history from local Kimi session files. (Superseded)
+- ADR-038: Replay OpenCode session history from local OpenCode SQLite storage. (Superseded)
+- ADR-039: Standardize session-history on ACP `session/load` replay. (Accepted)
+
+## ADR-039: Standardize Session-History on ACP `session/load` Replay
+
+- Status: Accepted
+- Date: 2026-03-12
+- Context:
+  - the Web UI already uses one generic `GET /v1/threads/{threadId}/session-history` flow after session sidebar selection.
+  - ACP `session/load` standard behavior replays prior conversation through `session/update` notifications before the RPC returns.
+  - earlier ngent implementations reconstructed replay from provider-local files or databases, which diverged from ACP and created provider-specific behavior that the product no longer wants.
+  - real-provider validation showed important runtime nuances:
+    - Codex raw ACP `sessionId` values returned by `session/list` are scoped to the same embedded runtime and cannot be safely reused across a second runtime.
+    - OpenCode replays transcript correctly over ACP `session/load`.
+    - Qwen replays transcript correctly over ACP `session/load` for locally created sessions.
+    - Qwen historical replay also includes non-message notifications such as `tool_call_update`, whose `content` payload does not follow the text-chunk schema.
+    - Kimi CLI 1.20.0 resumes historical sessions over ACP `session/load`, but currently emits no replay transcript updates for those historical loads.
+- Decision:
+  - implement `SessionTranscriptLoader` for `codex`, `kimi`, `opencode`, and `qwen` by:
+    - resolving the requested session through ACP `session/list`
+    - calling ACP `session/load`
+    - collecting replayed `user_message_chunk` and `agent_message_chunk` updates into transcript messages
+  - add shared ACP update parsing and a shared replay collector for `session/load` transcript reconstruction.
+  - keep the shared replay parser tolerant of non-message `session/update` variants so provider-specific tool/metadata updates do not abort transcript replay.
+  - for Codex, resolve and load the session within the same embedded runtime so runtime-scoped raw session ids remain valid.
+  - do not add provider-local transcript fallbacks behind the standard ACP path.
+- Consequences:
+  - `session-history` behavior now follows ACP semantics instead of provider-local storage formats.
+  - OpenCode, Codex, and Qwen replay their provider-owned transcript through standard ACP `session/load`.
+  - providers may interleave replayable text chunks with tool or metadata updates; ngent now ignores those non-message updates during transcript reconstruction instead of treating them as transport errors.
+  - Kimi currently remains limited by upstream behavior: historical `session/load` succeeds but yields no replay transcript messages on CLI 1.20.0.
+  - Codex replay now reflects raw provider-owned prompt content, including wrapper text that was previously normalized away.
+- Alternatives considered:
+  - keep provider-local transcript parsing for Kimi/OpenCode/Codex/Qwen.
+  - mix ACP `session/load` with local fallback parsing when replay updates are absent.
+  - add a non-standard transcript import step into SQLite.
+- Follow-up actions:
+  - keep validating newer Kimi CLI releases for proper historical replay over standard ACP `session/load`.
+  - decide later whether Codex replay text should be normalized again despite the ACP-first policy.
+
+## ADR-038: Replay OpenCode Session History from Local OpenCode SQLite Storage
+
+- Status: Accepted
+- Date: 2026-03-12
+- Context:
+  - the Web UI uses the same generic `GET /v1/threads/{threadId}/session-history` flow after session sidebar selection for all ACP agents.
+  - real OpenCode validation showed `session/list` and `session/load` both worked, but `opencode` exposed no `SessionTranscriptLoader`, so `/session-history` always returned `supported=false`.
+  - OpenCode stores replayable session content locally in `XDG_DATA_HOME/opencode/opencode.db`, with session metadata in `session` and visible text split across `message` + `part` rows.
+- Decision:
+  - implement `agents.SessionTranscriptLoader` for `internal/agents/opencode`.
+  - read the local OpenCode SQLite database directly in read-only mode instead of shelling out to `opencode export`.
+  - reconstruct transcript messages by:
+    - selecting `user` / `assistant` rows from `message`.
+    - appending only `part.type == "text"` payloads in insertion order.
+    - dropping `reasoning`, `tool`, `step-start`, and `step-finish` parts.
+  - reject transcript loads whose stored OpenCode `session.directory` does not match the active thread cwd.
+- Consequences:
+  - selecting an existing OpenCode session now replays provider-owned history in the center chat pane.
+  - replay no longer depends on OpenCode CLI subcommands that may mutate state or fail due local DB write behavior.
+  - the implementation now depends on OpenCode's local DB schema remaining compatible enough for read-only transcript reconstruction.
+- Alternatives considered:
+  - keep OpenCode session replay unsupported and rely only on ngent-local history.
+  - invoke `opencode export <sessionID>` for transcript reconstruction.
+  - parse only `session_diff` JSON files, even though they do not contain full chat transcript.
+- Follow-up actions:
+  - monitor future OpenCode schema changes and add a CLI-export fallback if the local DB layout becomes incompatible.
+
+## ADR-037: Replay Kimi Session History from Local Kimi Session Files
+
+- Status: Accepted
+- Date: 2026-03-12
+- Context:
+  - the Web UI already requests `GET /v1/threads/{threadId}/session-history` after the user selects a provider-owned session from the right sidebar.
+  - real Kimi debugging showed the backend successfully persisted and resumed `sessionId` through ACP `session/load`, but `kimi` exposed no `SessionTranscriptLoader`, so `/session-history` always returned `supported=false`.
+  - Kimi stores replayable chat history locally in `KIMI_HOME/sessions/*/<sessionId>/context.jsonl` for listable historical sessions, with assistant `think` blocks interleaved alongside visible text.
+- Decision:
+  - implement `agents.SessionTranscriptLoader` for `internal/agents/kimi`.
+  - resolve transcript files from the local Kimi home directory and parse `context.jsonl` directly instead of trying to reconstruct transcript from hub-local turns.
+  - keep only visible `user` / `assistant` text in replay payloads and drop `_checkpoint`, `_usage`, tool messages, and assistant `think` blocks before returning the transcript to the Web UI.
+- Consequences:
+  - selecting an existing Kimi session now replays provider-owned history in the center chat pane, matching the existing Codex session browsing behavior.
+  - the replay remains on-demand only; ngent still does not import provider transcript into persisted SQLite turns/events.
+  - fresh ACP-created Kimi sessions may still resume before they become visible in Kimi's own list/export surfaces; that remains an upstream/runtime limitation.
+- Alternatives considered:
+  - leave Kimi session replay unsupported and rely only on ngent-local history.
+  - shell out to `kimi export` for every replay request instead of reading local session files.
+  - attempt transcript reconstruction from `session/load` side effects during the next prompt.
+- Follow-up actions:
+  - monitor future Kimi CLI layout changes and add an export-based fallback if the local session directory format stops being stable enough for direct parsing.
 
 ## ADR-036: Persist Stable Codex Session IDs and Normalize Codex Transcript Replay
 

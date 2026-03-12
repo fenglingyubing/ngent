@@ -409,6 +409,15 @@ and upstream ACP schema:
   - if thread `sessionId` is present, provider calls ACP `session/load`.
   - otherwise provider calls ACP `session/new`.
   - provider reports the effective session id back through a thread-scoped callback.
+- Session transcript replay:
+  - providers may optionally expose replayable transcript messages for one selected session through `GET /v1/threads/{threadId}/session-history`.
+  - `codex`, `kimi`, `opencode`, and `qwen` implement replay by calling ACP `session/load` and collecting the replayed `session/update` stream (`user_message_chunk` / `agent_message_chunk`) into displayable transcript messages.
+  - replay collectors must ignore provider-specific non-message updates (for example Qwen `tool_call_update`) instead of treating them as fatal transport errors.
+  - `codex` must resolve the selected session and call `session/load` within the same embedded runtime because the raw ACP `sessionId` values returned by `session/list` are runtime-scoped.
+  - replay content is provider-owned and is returned as-is from the ACP stream; ngent does not normalize or import it into persisted SQLite turn/event history.
+  - current real-provider behavior is provider-dependent:
+    - `opencode`, `codex`, and `qwen` replay transcript messages over ACP `session/load`.
+    - Kimi CLI 1.20.0 successfully resumes historical sessions through `session/load` but currently emits no replay `session/update` notifications for those sessions, so transcript replay stays empty under the ACP-only implementation.
 - HTTP turn handling persists the bound session id back into `threads.agent_options_json` and emits SSE `session_bound`.
 
 ### 15.4 Prompt Construction

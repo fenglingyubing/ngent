@@ -108,6 +108,7 @@
 - Workaround:
   - ensure writable home/config directory for qwen runtime (`HOME`, `~/.qwen`).
   - ensure qwen authentication is completed and network path to model backend is available before turn execution.
+  - run real qwen validation outside restrictive sandboxes when verifying `session/list` / `session/load` behavior against the locally installed CLI.
 - Follow-up plan:
   - add clearer preflight diagnostics for qwen runtime prerequisites (filesystem writable check + auth hints).
   - map common qwen upstream errors to stable hub error details for easier operator debugging.
@@ -204,6 +205,34 @@
 - Status: Open
 - Severity: Low
 - Affects: Codex `session/list` entries rendered in the Web UI session sidebar
-- Symptom: Codex provider metadata can expose long summary-style titles/previews such as `[Conversation Summary] ... [Current User Input] ...`; replayed chat messages are normalized, but the sidebar item title itself can still look noisy.
-- Workaround: use the thread title or open the session to inspect the normalized chat content when the sidebar label is ambiguous.
+- Symptom: Codex provider metadata and replayed transcript can expose long wrapper-generated text such as `[Conversation Summary] ... [Current User Input] ...` or IDE context blocks because ngent now shows the raw provider-owned ACP replay.
+- Workaround: use the thread title or the most recent visible turn content when the sidebar label or replayed prompt body is noisy.
 - Follow-up plan: normalize Codex `session/list` display titles in the backend, likely by preferring the first replayable user prompt over raw provider preview text when available.
+
+- ID: KI-023
+- Title: Fresh Kimi ACP sessions may resume before they appear in Kimi session browsing surfaces
+- Status: Open
+- Severity: Medium
+- Affects: newly created Kimi sessions bound through ngent ACP turns
+- Symptom:
+  - a just-created Kimi `sessionId` can be resumed successfully through ACP `session/load`, but may still be absent from Kimi's own `session/list`, `kimi export`, and local `~/.kimi/sessions/*/<sessionId>` files for a while.
+  - ngent can continue the bound session on the same or another thread if the `sessionId` is already known, but the session sidebar may not show the new session immediately after creation.
+- Workaround:
+  - continue using the bound thread directly after the first Kimi turn when the new session does not yet appear in the sidebar.
+  - retry session browsing later if the session needs to be re-selected from the sidebar.
+- Follow-up plan:
+  - keep validating newer Kimi CLI releases and add a backend fallback only if Kimi later exposes a reliable transcript/export path for freshly created ACP sessions.
+
+- ID: KI-024
+- Title: Kimi CLI 1.20.0 does not replay transcript messages during historical session/load
+- Status: Open
+- Severity: Medium
+- Affects: Kimi historical session replay through `GET /v1/threads/{threadId}/session-history`
+- Symptom:
+  - Kimi `session/list` returns historical sessions and ACP `session/load` succeeds for those session ids.
+  - Kimi CLI 1.20.0 currently emits no replay `session/update` notifications for those historical loads, so ngent returns `supported=true` with an empty transcript under the ACP-only implementation.
+- Workaround:
+  - continue the selected Kimi session normally; `session/load` still restores provider context for subsequent turns.
+  - use ngent-local `/history` for turns created through ngent itself.
+- Follow-up plan:
+  - keep validating newer Kimi CLI releases and switch to transcript replay immediately if Kimi starts emitting standard `session/update` history during `session/load`.

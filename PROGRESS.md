@@ -11,20 +11,52 @@ This file is the source of milestone progress, validation commands, and next act
 
 - `Post-M8` ACP multi-agent readiness and maintenance.
 
-## Latest Update (2026-03-11)
+## Latest Update (2026-03-12)
+
+- `Post-M8` ACP `session/load` transcript replay standardization completed:
+  - removed provider-specific transcript reconstruction for `kimi`, `opencode`, `codex`, and `qwen`; `GET /v1/threads/{threadId}/session-history` now uses the same ACP path for all four providers:
+    - resolve the selected session from ACP `session/list`
+    - call ACP `session/load`
+    - collect replayed `session/update` notifications into `user` / `assistant` messages
+  - extended shared ACP update parsing to support standard `user_message_chunk` and `agent_message_chunk` replay events, and added a shared transcript collector for `session/load` history replay.
+  - fixed Codex session replay to list and load within the same embedded runtime because Codex raw ACP `sessionId` values are runtime-scoped; cross-runtime reuse of `session-1`-style ids returns `unknown session`.
+  - real regression on rebuilt ngent:
+    - `kimi`: ACP `session/load` succeeds for historical sessions but Kimi CLI 1.20.0 emits no replay `session/update` notifications, so `/session-history` currently returns `supported=true` with an empty message list under the standard ACP-only implementation.
+    - `qwen`: a real locally-created Qwen session now replays transcript messages through the same ACP `session/list` + `session/load` path; env-gated provider E2E confirms the replay contains the unique prompt marker from the created session.
+  - validation:
+    - pass: `go test ./internal/agents/qwen -count=1`
+    - pass: `E2E_QWEN=1 go test ./internal/agents/qwen -run 'TestQwenE2E(Smoke|SessionTranscriptReplay)$' -count=1 -v -timeout 180s`
+    - pass: `go test ./internal/agents/...`
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `go test ./...`
+    - pass: real `opencode` `/session-history` regression on rebuilt ngent
+    - pass: real `codex` `/session-history` regression on rebuilt ngent
+    - observed: real `kimi` `session/load` returns no replay updates on Kimi CLI 1.20.0
+- `Post-M8` Qwen session-history replay fix completed:
+    - direct ACP `session/load` for that session replayed `user_message_chunk` and `agent_message_chunk`, proving Qwen itself was returning transcript content.
+    - ngent `GET /v1/threads/{threadId}/session-history?sessionId=...` initially failed with `503 UPSTREAM_UNAVAILABLE` and `qwen: session/load: qwen: connection closed`.
+  - root cause:
+    - ngent transcript replay parsing treated Qwen `tool_call_update` notifications as fatal because their `content` payload is an array/object, not the `{type,text}` shape used by text chunks.
+    - the ACP stdio transport closes the whole connection when a notification handler returns an error, so one unexpected Qwen update aborted the replay before the RPC response arrived.
+  - fix:
+    - relaxed shared ACP update parsing so only text-bearing `user_message_chunk` / `agent_message_chunk` notifications are decoded strictly; non-text update payloads are ignored instead of aborting replay.
+    - extended Qwen transcript fake-process coverage to include a `tool_call_update` regression payload.
+  - validation:
+    - pass: `go test ./internal/agents -run 'TestParseACPUpdate' -count=1`
+    - pass: `go test ./internal/agents/qwen -run 'SessionTranscript' -count=1`
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `go test ./...`
+
+## Previous Update (2026-03-11)
 
 - `Post-M8` codex session identity and replay normalization completed:
   - fixed fresh Codex `New session` persistence so ngent no longer stores provisional runtime ids like `session-1` as the thread session binding when a durable `_meta.threadId` is not yet available.
   - deferred initial `session_bound` persistence/emission for fresh Codex sessions until a stable session id can be resolved after the first prompt, then updated in-memory and persisted thread `agentOptions.sessionId` with the durable id.
-  - normalized Codex transcript replay by filtering bootstrap user messages injected by the desktop wrapper (`AGENTS.md` / `environment_context`) and extracting the actual user request from known wrapper formats:
-    - `[Conversation Summary] ... [Current User Input]`
-    - `# Context from my IDE setup: ... ## My request for Codex:`
   - verified with real local Codex and Playwright against `http://127.0.0.1:8687/`:
     - `New session` now produces distinct stable Codex session ids and no longer mixes first-session messages into the second-session chat.
-    - switching between the two replayed sessions in the Web UI now shows only the expected user/assistant pairs.
-    - direct `session-history` API responses for the repro sessions now return cleaned transcript messages.
+    - switching between the two replayed sessions in the Web UI no longer mixes first-session messages into the second-session chat.
   - validation:
-    - pass: `go test ./internal/agents/codex -run 'Test(ParseSessionTranscriptMessage|CodexShouldDeferInitialSessionBinding|NormalizeCodexSessionListResultUsesStableThreadID|CodexSessionMatchesIDAcceptsStableAndRawIDs|CodexStableSessionIDFallsBackToRawSessionID)$' -count=1`
+    - pass: `go test ./internal/agents/codex -run 'Test(CodexShouldDeferInitialSessionBinding|NormalizeCodexSessionListResultUsesStableThreadID|CodexSessionMatchesIDAcceptsStableAndRawIDs|CodexStableSessionIDFallsBackToRawSessionID)$' -count=1`
     - pass: `cd internal/webui/web && npm run build`
     - pass: `go test ./...`
 
@@ -288,12 +320,6 @@ This file is the source of milestone progress, validation commands, and next act
 
 
 
-- `gofmt -w .`
-- `go test ./...`
-- `make fmt`
-- `make test`
-- `make run`
-
 ## Latest Verification
 
 - Date: `2026-02-28`
@@ -327,17 +353,6 @@ This file is the source of milestone progress, validation commands, and next act
   - qwen real smoke: pass (`PONG`, `stopReason=end_turn`)
   - server/httpapi regression tests: pass
   - full repo tests: pass
-
-## Dependency Fetch Notes
-
-- Date: `2026-02-28`
-- Failure 1:
-  - command: `go get modernc.org/sqlite`
-  - error: `lookup proxy.golang.org: no such host`
-- Effective workaround:
-  - used locally cached module `modernc.org/sqlite@v1.18.2` and offline-capable verification.
-- Effective workaround:
-  - reused locally cached `github.com/beyond5959/acp-adapter` pseudo-version already present in module cache and pinned it as direct dependency in `go.mod`.
 
 ## Milestone Plan (M0-M8)
 
