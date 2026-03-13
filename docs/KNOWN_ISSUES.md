@@ -279,3 +279,18 @@
 - Follow-up plan:
   - keep provider-specific delivery timing fixes in place; codex caches the initial `session/new` / `session/load` snapshot before the first prompt, and Kimi/Qwen/OpenCode/Gemini now share both the same early ACP notification handling and the same provider-local slash-command cache across turn/config-session flows, so the remaining risk here is cache-key scope or provider emission behavior, not notification loss inside ngent.
   - revisit the cache key and move to `(agent_id, cwd)` or another provider-specific scope if a real agent starts varying slash commands by context.
+
+- ID: KI-028
+- Title: Real OpenCode ACP `session/new` can stall until hub timeout
+- Status: Open
+- Severity: Medium
+- Affects: real `opencode` ACP turns and the host smoke test path
+- Symptom:
+  - on the current host validation run dated 2026-03-13, `E2E_OPENCODE=1 go test ./internal/agents/opencode -run TestOpenCodeE2ESmoke -count=1 -v -timeout 180s` failed with `opencode: session/new: context deadline exceeded`.
+  - the process starts and initializes, but the upstream CLI does not complete `session/new` before the 45-second test context expires.
+- Workaround:
+  - verify local OpenCode auth/session readiness and backend reachability outside ngent, then retry.
+  - if turns are business-critical, prefer a provider whose local CLI is already known-good on the host until OpenCode readiness is restored.
+- Follow-up plan:
+  - add richer diagnostics around stalled OpenCode `session/new` calls so auth/backend/readiness failures are distinguishable from protocol regressions.
+  - keep rerunning the real smoke after local OpenCode environment fixes to confirm the shared ACP driver is not the blocking factor.

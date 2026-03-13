@@ -392,6 +392,171 @@ for line in sys.stdin:
 	}
 }
 
+func TestSetConfigOptionModelUsesStartupModelSelection(t *testing.T) {
+	python3, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 not in PATH")
+	}
+
+	fakeScript := fmt.Sprintf(`#!%s
+import json
+import sys
+
+args = sys.argv[1:]
+selected_model = "opencode/big-pickle"
+for i, arg in enumerate(args):
+    if arg == "-m" and i + 1 < len(args):
+        selected_model = args[i + 1]
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    method = req.get("method", "")
+    rid = req.get("id")
+    params = req.get("params", {})
+    if method == "initialize":
+        send({"jsonrpc":"2.0","id":rid,"result":{
+            "protocolVersion":1,
+            "agentInfo":{"name":"FakeOpenCode","version":"0.0.1"},
+            "agentCapabilities":{},"authMethods":[]
+        }})
+    elif method == "session/new":
+        send({"jsonrpc":"2.0","id":rid,"result":{
+            "sessionId":"ses_model_switch",
+            "models":{
+                "currentModelId":selected_model,
+                "availableModels":[
+                    "opencode/big-pickle",
+                    "opencode/minimax-m2.5-free"
+                ]
+            }
+        }})
+    elif method == "session/set_config_option":
+        send({"jsonrpc":"2.0","id":rid,"error":{"code":-32601,"message":"method not found"}})
+        sys.exit(0)
+`, python3)
+
+	tmpDir := t.TempDir()
+	fakeBin := tmpDir + "/opencode"
+	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o755); err != nil {
+		t.Fatalf("write fake binary: %v", err)
+	}
+
+	t.Setenv("PATH", tmpDir+":"+os.Getenv("PATH"))
+
+	client, err := opencode.New(opencode.Config{Dir: tmpDir})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	options, err := client.SetConfigOption(context.Background(), "model", "opencode/minimax-m2.5-free")
+	if err != nil {
+		t.Fatalf("SetConfigOption(model): %v", err)
+	}
+	if got, want := client.CurrentModelID(), "opencode/minimax-m2.5-free"; got != want {
+		t.Fatalf("CurrentModelID() = %q, want %q", got, want)
+	}
+	if got, want := len(options), 1; got != want {
+		t.Fatalf("len(options) = %d, want %d", got, want)
+	}
+	if got, want := strings.TrimSpace(options[0].CurrentValue), "opencode/minimax-m2.5-free"; got != want {
+		t.Fatalf("options[0].CurrentValue = %q, want %q", got, want)
+	}
+}
+
+func TestStreamUsesStartupModelSelection(t *testing.T) {
+	python3, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 not in PATH")
+	}
+
+	fakeScript := fmt.Sprintf(`#!%s
+import json
+import sys
+
+args = sys.argv[1:]
+selected_model = "opencode/big-pickle"
+for i, arg in enumerate(args):
+    if arg == "-m" and i + 1 < len(args):
+        selected_model = args[i + 1]
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    method = req.get("method", "")
+    rid = req.get("id")
+    params = req.get("params", {})
+    if method == "initialize":
+        send({"jsonrpc":"2.0","id":rid,"result":{
+            "protocolVersion":1,
+            "agentInfo":{"name":"FakeOpenCode","version":"0.0.1"},
+            "agentCapabilities":{},"authMethods":[]
+        }})
+    elif method == "session/new":
+        send({"jsonrpc":"2.0","id":rid,"result":{
+            "sessionId":"ses_stream_model",
+            "models":{
+                "currentModelId":selected_model,
+                "availableModels":[
+                    "opencode/big-pickle",
+                    "opencode/minimax-m2.5-free"
+                ]
+            }
+        }})
+    elif method == "session/prompt":
+        sid = params.get("sessionId","")
+        send({"jsonrpc":"2.0","method":"session/update","params":{
+            "sessionId":sid,
+            "update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":selected_model}}
+        }})
+        send({"jsonrpc":"2.0","id":rid,"result":{"stopReason":"end_turn","usage":{}}})
+        sys.exit(0)
+`, python3)
+
+	tmpDir := t.TempDir()
+	fakeBin := tmpDir + "/opencode"
+	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o755); err != nil {
+		t.Fatalf("write fake binary: %v", err)
+	}
+
+	t.Setenv("PATH", tmpDir+":"+os.Getenv("PATH"))
+
+	client, err := opencode.New(opencode.Config{
+		Dir:     tmpDir,
+		ModelID: "opencode/minimax-m2.5-free",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var deltas []string
+	reason, err := client.Stream(context.Background(), "say model", func(delta string) error {
+		deltas = append(deltas, delta)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if got, want := reason, agents.StopReasonEndTurn; got != want {
+		t.Fatalf("StopReason = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(deltas, ""), "opencode/minimax-m2.5-free"; got != want {
+		t.Fatalf("streamed model = %q, want %q", got, want)
+	}
+}
+
 // TestOpenCodeE2ESmoke performs a real turn with the installed opencode binary.
 // Run with: E2E_OPENCODE=1 go test ./internal/agents/opencode/ -run E2E -v -timeout 60s
 func TestOpenCodeE2ESmoke(t *testing.T) {

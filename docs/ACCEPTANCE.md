@@ -123,6 +123,9 @@ This checklist defines executable acceptance checks for requirements 1-16.
 - Verification commands:
   - `go test ./internal/agents/opencode -run TestStreamWithFakeProcess -count=1`
   - `E2E_OPENCODE=1 go test ./internal/agents/opencode -run TestOpenCodeE2ESmoke -v -timeout 60s`
+- Latest observed validation (2026-03-13):
+  - unit/fake-process path: pass
+  - real host smoke: fail with `opencode: session/new: context deadline exceeded`; tracked as `KI-028`
 
 ## Requirement 15: Gemini CLI Agent
 
@@ -145,6 +148,9 @@ This checklist defines executable acceptance checks for requirements 1-16.
   - `go test ./internal/agents/qwen -count=1` (pass)
   - `E2E_QWEN=1 go test ./internal/agents/qwen -run TestQwenE2ESmoke -v -timeout 120s` (pass, real prompt returns `PONG`)
   - `go test ./cmd/ngent ./internal/httpapi -count=1` (pass)
+- Additional validation (executed 2026-03-13):
+  - `E2E_QWEN=1 go test ./internal/agents/qwen -run TestQwenE2ESmoke -count=1 -v -timeout 180s` (pass)
+  - `E2E_QWEN=1 go test ./internal/agents/qwen -run TestQwenE2ESessionTranscriptReplay -count=1 -v -timeout 240s` (pass)
 
 ## Requirement 16A: Kimi CLI Agent
 
@@ -160,6 +166,9 @@ This checklist defines executable acceptance checks for requirements 1-16.
   - `E2E_KIMI=1 go test ./internal/agents/kimi -run TestKimiConfigOptionsE2EDoesNotCreateSession -v -timeout 120s`
   - `E2E_KIMI=1 go test ./internal/agents/kimi -run TestKimiE2ESmoke -v -timeout 120s`
   - `go test ./cmd/ngent ./internal/httpapi -count=1`
+- Additional validation (executed 2026-03-13):
+  - `E2E_KIMI=1 go test ./internal/agents/kimi -run TestKimiConfigOptionsE2EDoesNotCreateSession -count=1 -v -timeout 240s` (pass)
+  - `E2E_KIMI=1 go test ./internal/agents/kimi -run TestKimiE2ESmoke -count=1 -v -timeout 180s` (pass)
 
 ## Requirement 17: Thread Delete Lifecycle
 

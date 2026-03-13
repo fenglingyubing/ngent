@@ -13,6 +13,24 @@ This file is the source of milestone progress, validation commands, and next act
 
 ## Latest Update (2026-03-13)
 
+- `Post-M8` shared ACP CLI provider driver completed:
+  - extracted `internal/agents/acpcli` as the shared ACP CLI lifecycle driver for `qwen`, `opencode`, `gemini`, and `kimi`, covering shared `initialize/session/new/session/load/session/list/session/prompt/session/set_config_option` flow plus model discovery and transcript replay.
+  - migrated the four ACP CLI providers to provider-hook configuration instead of maintaining separate copies of the same stdio/session orchestration logic.
+  - extended `internal/agents/acpstdio` with opt-in stdout-noise tolerance so Gemini can reuse the same transport instead of a provider-local JSON-RPC implementation.
+  - preserved provider-specific behavior behind hooks:
+    - `kimi` keeps local config sourcing, `kimi acp` / `kimi --acp` fallback, and model-via-startup handling.
+    - `gemini` keeps temporary `GEMINI_CLI_HOME` bootstrapping and stdout noise filtering.
+    - `qwen` / `kimi` keep selectable permission-option mapping and fail-closed timeout handling.
+    - `opencode` keeps synchronous `session/cancel` behavior.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `go test ./...`
+    - pass: real host smoke `E2E_QWEN=1 go test ./internal/agents/qwen -run TestQwenE2ESmoke -count=1 -v -timeout 180s`
+    - pass: real host replay `E2E_QWEN=1 go test ./internal/agents/qwen -run TestQwenE2ESessionTranscriptReplay -count=1 -v -timeout 240s`
+    - pass: real host config probe `E2E_KIMI=1 go test ./internal/agents/kimi -run TestKimiConfigOptionsE2EDoesNotCreateSession -count=1 -v -timeout 240s`
+    - pass: real host smoke `E2E_KIMI=1 go test ./internal/agents/kimi -run TestKimiE2ESmoke -count=1 -v -timeout 180s`
+    - observed failure: real host smoke `E2E_OPENCODE=1 go test ./internal/agents/opencode -run TestOpenCodeE2ESmoke -count=1 -v -timeout 180s` returned `opencode: session/new: context deadline exceeded`; tracked in `docs/KNOWN_ISSUES.md`.
+
 - `Post-M8` Web UI/session reset regression fixed:
   - completed the `New session` fix after switching to a historical ACP session: clearing `thread.agentOptions.sessionId` still evicts stale empty-scope providers, and now also marks the next turn as an explicit fresh-session request so prompt building skips `[Conversation Summary]` / `[Recent Turns]` injection for that first turn.
   - kept the fresh-session marker server-internal: it is persisted in `thread.agent_options_json` only until the next `session_bound`, but stripped from public thread responses so the API contract stays stable.

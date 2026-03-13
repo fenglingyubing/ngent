@@ -19,6 +19,7 @@ Modules:
 - `internal/runtime`: thread controller, turn state machine, cancellation coordination.
 - `internal/agents`: agent providers (fake + ACP-compatible implementations), plus context-bound permission callback bridge.
   - per-turn provider resolution selects implementation by thread metadata (agent id + cwd).
+  - `internal/agents/acpcli` is the shared ACP CLI driver used by `qwen`, `opencode`, `gemini`, and `kimi`; provider-specific hooks own command startup, request parameter shaping, permission mapping, and cancel quirks.
 - `internal/context`: prompt injection strategy assembled in HTTP/runtime path from summary + recent turns + current input.
 - `internal/sse`: event formatting, stream fanout, resume helpers.
 - `internal/storage`: SQLite repository and migration management.
@@ -38,6 +39,7 @@ Modules:
 - On server boot: no agent process is started.
 - On first thread usage: runtime requests provider instance for that thread.
 - On first turn execution for embedded-provider thread (currently `codex`): server creates the in-process runtime and initializes ACP session lazily.
+- Process-per-operation ACP CLI providers (`qwen`, `opencode`, `gemini`, `kimi`) reuse the shared `acpcli` driver; each provider opens a fresh ACP stdio process per stream/config/list/discovery/transcript operation while keeping provider-specific startup hooks.
 - Embedded runtime `session/new` is created with `cwd=thread.cwd` (validated as absolute path at thread creation).
 - If `thread.agent_options_json` contains `modelId`, providers apply it as model override during thread-level runtime/session initialization.
 - Provider instances are cached per thread/session/config scope and reclaimed by idle TTL (`--agent-idle-ttl`) when that scope has no active turn.
@@ -111,6 +113,23 @@ See `docs/API.md` for endpoint and schema contracts.
 - logs are JSON on stderr and redact sensitive data.
 - `--debug=true` raises log verbosity to debug level and emits sanitized ACP JSON-RPC request/response traces on stderr.
 - HTTP payloads contain protocol data only.
+
+## 10A. Shared ACP CLI Driver
+
+- The shared ACP CLI driver owns the common lifecycle for ACP-capable external CLIs:
+  - open process and stdio transport
+  - `initialize`
+  - `session/new`, `session/load`, `session/list`, `session/prompt`
+  - `session/set_config_option`
+  - model discovery via `session/new`
+  - transcript replay via `session/load`
+- Provider-specific hooks remain responsible for:
+  - command/env startup shape
+  - request parameter schemas
+  - permission-request response encoding
+  - cancel strategy
+  - provider quirks such as Kimi local config/model-startup behavior and Gemini stdout-noise filtering
+- `internal/agents/acpstdio` now supports opt-in stdout-noise tolerance so providers like Gemini can ignore non-JSON stdout lines without maintaining a separate transport implementation.
 
 ## 10. Error Contract
 

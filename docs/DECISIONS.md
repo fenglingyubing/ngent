@@ -44,6 +44,42 @@
 - ADR-040: Cache session-history replay snapshots in SQLite. (Accepted)
 - ADR-041: Treat Web UI "New session" as provider-cache reset for the empty session scope. (Accepted)
 - ADR-042: Treat explicit Web UI "New session" as a fresh turn with no injected thread context. (Accepted)
+- ADR-043: Share one ACP CLI driver across Kimi/Qwen/OpenCode/Gemini. (Accepted)
+
+## ADR-043: Share One ACP CLI Driver Across Kimi/Qwen/OpenCode/Gemini
+
+- Status: Accepted
+- Date: 2026-03-13
+- Context:
+  - `qwen`, `opencode`, `kimi`, and `gemini` all run as ACP-over-stdio providers inside ngent.
+  - before this refactor, each provider duplicated the same lifecycle code for process startup, `initialize`, `session/new`, `session/load`, `session/list`, `session/prompt`, config-option probing, model discovery, and transcript replay.
+  - the duplication made protocol fixes expensive and increased the cost of adding another ACP-capable CLI in the future.
+  - the real differences between these providers are comparatively small:
+    - startup command and environment.
+    - `session/new/load/prompt` parameter shapes.
+    - permission request/response encoding.
+    - cancel strategy.
+    - provider quirks such as Kimi local config fallback and Gemini stdout noise before JSON-RPC frames.
+- Decision:
+  - introduce shared package `internal/agents/acpcli` as the common driver for ACP CLI providers.
+  - keep provider-specific behavior as hooks:
+    - process launcher/open-connection logic.
+    - ACP request parameter builders.
+    - permission-response mapping.
+    - cancel behavior.
+    - config-session planning for provider quirks such as Kimi model selection at process startup.
+  - standardize all four providers on `internal/agents/acpstdio.Conn`.
+  - extend `acpstdio` with opt-in stdout-noise tolerance so Gemini can reuse the same shared transport instead of keeping its own JSON-RPC connection implementation.
+  - reuse the same shared driver for model discovery and `session/load` transcript replay, not only turn streaming.
+- Consequences:
+  - future ACP CLI providers can usually be added by supplying a small provider spec/hook layer instead of copying full lifecycle code.
+  - transport/protocol fixes now land once and benefit all ACP CLI providers together.
+  - provider-specific quirks remain isolated and explicit rather than being hidden in near-identical forked implementations.
+  - real-provider regressions can still come from local CLI readiness/auth/network state; sharing the driver does not hide upstream availability issues.
+- Alternatives considered:
+  - keep separate provider implementations and continue copy-pasting fixes.
+  - introduce one fully generic provider configured only by command string/args, without explicit provider hook points.
+  - keep Gemini on its own transport while only partially sharing logic for the other providers.
 
 ## ADR-042: Treat Explicit Web UI "New session" as a Fresh Turn with No Injected Thread Context
 
