@@ -81,6 +81,7 @@ interface SessionPanelState {
 
 const sessionPanelStateByThread = new Map<string, SessionPanelState>()
 const sessionPanelRequestSeqByThread = new Map<string, number>()
+const sessionPanelScrollTopByThread = new Map<string, number>()
 let sessionPanelRequestSeq = 0
 
 function cloneConfigOptions(options: ConfigOption[]): ConfigOption[] {
@@ -886,6 +887,9 @@ async function switchThreadSession(thread: Thread, nextSessionID: string): Promi
 
   sessionSwitchingThreads.add(thread.threadId)
   updateSessionPanel()
+  if (store.get().activeThreadId === thread.threadId) {
+    updateInputState()
+  }
   try {
     const updatedThread = await api.updateThread(thread.threadId, {
       agentOptions: buildThreadAgentOptionsWithSession(thread.agentOptions, nextSessionID),
@@ -900,6 +904,7 @@ async function switchThreadSession(thread: Thread, nextSessionID: string): Promi
   } finally {
     sessionSwitchingThreads.delete(thread.threadId)
     if (store.get().activeThreadId === thread.threadId) {
+      updateInputState()
       updateSessionPanel()
     }
   }
@@ -1005,10 +1010,25 @@ function updateSessionPanel(): void {
   const el = document.getElementById('session-sidebar')
   if (!el) return
 
+  const renderedThreadID = el.dataset.threadId?.trim() ?? ''
+  const previousBody = el.querySelector<HTMLElement>('.session-panel-body')
+  if (renderedThreadID && previousBody) {
+    sessionPanelScrollTopByThread.set(renderedThreadID, previousBody.scrollTop)
+  }
+
   el.innerHTML = renderSessionPanel()
   const { activeThreadId, threads } = store.get()
   const thread = activeThreadId ? threads.find(item => item.threadId === activeThreadId) : null
-  if (!thread) return
+  if (!thread) {
+    delete el.dataset.threadId
+    return
+  }
+
+  el.dataset.threadId = thread.threadId
+  const nextBody = el.querySelector<HTMLElement>('.session-panel-body')
+  if (nextBody) {
+    nextBody.scrollTop = sessionPanelScrollTopByThread.get(thread.threadId) ?? 0
+  }
 
   const state = sessionPanelState(thread.threadId)
   if (state.supported === null && !state.loading && !state.loadingMore && !state.error) {
@@ -1554,6 +1574,7 @@ async function handleDeleteThread(threadId: string): Promise<void> {
   })
   sessionPanelStateByThread.delete(threadId)
   sessionPanelRequestSeqByThread.delete(threadId)
+  sessionPanelScrollTopByThread.delete(threadId)
   sessionSwitchingThreads.delete(threadId)
   let nextThreadCompletionBadges = omitThreadCompletionBadge(state.threadCompletionBadges, threadId)
   if (nextActiveThreadId) {
@@ -1941,15 +1962,16 @@ function updateInputState(): void {
   const cancelBtn = document.getElementById('cancel-btn') as HTMLButtonElement   | null
   const inputEl  = document.getElementById('message-input') as HTMLTextAreaElement | null
   const isSwitchingConfig = !!activeThreadId && threadConfigSwitching.has(activeThreadId)
+  const isSwitchingSession = !!activeThreadId && sessionSwitchingThreads.has(activeThreadId)
   const hasThreadStreaming = hasThreadStream(activeThreadId)
 
-  if (sendBtn)  sendBtn.disabled  = isStreaming || isSwitchingConfig
-  if (inputEl)  inputEl.disabled  = isStreaming || isSwitchingConfig
+  if (sendBtn)  sendBtn.disabled  = isStreaming || isSwitchingConfig || isSwitchingSession
+  if (inputEl)  inputEl.disabled  = isStreaming || isSwitchingConfig || isSwitchingSession
   document.querySelectorAll<HTMLButtonElement>('.thread-model-trigger').forEach(triggerEl => {
     const pickerState = triggerEl.dataset.state ?? 'empty'
     const configID = triggerEl.dataset.configId?.trim() ?? ''
     const noSelectableValue = pickerState !== 'ready' || !configID
-    const disabled = hasThreadStreaming || isSwitchingConfig || noSelectableValue
+    const disabled = hasThreadStreaming || isSwitchingConfig || isSwitchingSession || noSelectableValue
     triggerEl.disabled = disabled
     if (disabled) {
       triggerEl.setAttribute('aria-expanded', 'false')
@@ -2353,6 +2375,7 @@ function handleSend(): void {
   if (!activeThreadId) return
 
   const thread = threads.find(t => t.threadId === activeThreadId)
+  if (!thread || sessionSwitchingThreads.has(thread.threadId)) return
   const capturedThreadID = activeThreadId
   let capturedSessionID = threadSessionID(thread)
   let capturedScopeKey = threadSessionScopeKey(capturedThreadID, capturedSessionID)

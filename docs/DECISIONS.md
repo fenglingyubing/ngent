@@ -42,6 +42,51 @@
 - ADR-038: Replay OpenCode session history from local OpenCode SQLite storage. (Superseded)
 - ADR-039: Standardize session-history on ACP `session/load` replay. (Accepted)
 - ADR-040: Cache session-history replay snapshots in SQLite. (Accepted)
+- ADR-041: Treat Web UI "New session" as provider-cache reset for the empty session scope. (Accepted)
+- ADR-042: Treat explicit Web UI "New session" as a fresh turn with no injected thread context. (Accepted)
+
+## ADR-042: Treat Explicit Web UI "New session" as a Fresh Turn with No Injected Thread Context
+
+- Status: Accepted
+- Date: 2026-03-13
+- Context:
+  - after ADR-041, real Codex + Playwright validation on 2026-03-13 still reproduced the user-visible bug: selecting historical session `B`, clicking `New session`, then sending a prompt produced a new ACP `sessionId`, but the first prompt still contained `[Conversation Summary]` / `[Recent Turns]` from thread session `A`.
+  - the root cause was `buildInjectedPrompt()`: ngent treats any empty `sessionId` as a local-context continuation and wraps the next prompt with prior thread turns.
+  - disabling context injection for all empty-session turns would be too broad because brand-new no-session threads still benefit from local prompt continuation after earlier turns.
+- Decision:
+  - persist one internal thread option `_ngentFreshSession=true` only when an existing non-empty `sessionId` is explicitly cleared through the Web UI `New session` flow.
+  - while `_ngentFreshSession=true` and `sessionId` is empty, bypass local context injection and send the raw user input into ACP `session/new` / `session/prompt`.
+  - automatically clear `_ngentFreshSession` when a new session binds or when the user selects an explicit existing `sessionId`.
+  - strip `_ngentFreshSession` from public thread responses and from session-only diff checks so the flag remains server-internal and does not change client-visible API semantics.
+- Consequences:
+  - explicit `New session` now means a blank fresh ACP session from the user's perspective, not merely a new durable `sessionId`.
+  - ordinary threads that have no bound session for other reasons still keep existing context-window behavior.
+  - stale plain-empty and fresh-empty cached providers are both evicted on explicit reset, so neither scope can silently reuse the wrong runtime.
+- Alternatives considered:
+  - disable context injection for every empty-session turn.
+  - expose a dedicated public `session/new` endpoint and model fresh-session state outside `PATCH /v1/threads/{threadId}`.
+  - leave the internal fresh-session marker in API responses.
+
+## ADR-041: Treat Web UI "New session" as Provider-Cache Reset for the Empty Session Scope
+
+- Status: Accepted
+- Date: 2026-03-13
+- Context:
+  - the Web UI uses `PATCH /v1/threads/{threadId}` with `agentOptions.sessionId` cleared to represent "New session", and the next turn is expected to force ACP `session/new`.
+  - ngent caches managed providers by `(threadId, normalized agentOptions)` scope.
+  - if a stale provider is still cached under the empty-session scope, simply clearing `sessionId` can reuse that provider and route the next prompt into an older ACP session instead of a fresh one.
+- Decision:
+  - when a session-only thread update changes `sessionId` from a non-empty value to empty, evict any idle cached provider for the target empty-session scope before the next turn starts.
+  - keep the current selected-session provider cache intact; only the provisional empty-session scope is force-reset.
+  - keep the Web UI composer disabled while a session switch request is in flight so the user cannot submit a turn against stale selection state.
+- Consequences:
+  - `New session` semantics become deterministic: the next turn must resolve a fresh provider/session for the empty scope.
+  - existing cached providers for explicit session ids remain reusable, so historical-session switching and multi-session concurrency are preserved.
+  - the empty-session-scope eviction is intentionally narrow and skips active turns.
+- Alternatives considered:
+  - optimistically trust that no stale empty-scope provider can exist.
+  - close every cached provider on any session selection update.
+  - add a dedicated `session/new` API endpoint instead of continuing to encode "new session" as `sessionId=""`.
 
 ## ADR-040: Cache Session-History Replay Snapshots in SQLite
 

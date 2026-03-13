@@ -13,6 +13,16 @@ This file is the source of milestone progress, validation commands, and next act
 
 ## Latest Update (2026-03-13)
 
+- `Post-M8` Web UI/session reset regression fixed:
+  - completed the `New session` fix after switching to a historical ACP session: clearing `thread.agentOptions.sessionId` still evicts stale empty-scope providers, and now also marks the next turn as an explicit fresh-session request so prompt building skips `[Conversation Summary]` / `[Recent Turns]` injection for that first turn.
+  - kept the fresh-session marker server-internal: it is persisted in `thread.agent_options_json` only until the next `session_bound`, but stripped from public thread responses so the API contract stays stable.
+  - added a backend regression test that reproduces the real `A -> historical B -> New session -> send` path and verifies the new session transcript contains only the new user/assistant exchange instead of wrapped prior thread history.
+  - disabled composer send/input while the Web UI is switching thread sessions, preventing users from submitting a turn against a session selection that is still in flight.
+  - validation:
+    - pass: `go test ./internal/httpapi -run 'Test(NewSessionResetSkipsContextInjection|TurnSessionBoundPersistsSessionIDAndSkipsContextInjection|UpdateThreadClearingSessionDropsStaleUnboundProvider)' -count=1`
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `go test ./...`
+
 - `Post-M8` session-history sqlite cache completed:
   - added SQLite table `session_transcript_cache` keyed by `(agent_id, cwd, session_id)` to persist provider-owned session replay snapshots separately from hub `turns/events`.
   - `GET /v1/threads/{threadId}/session-history` now reads sqlite first; on cache miss it still calls provider `LoadSessionTranscript`, then persists the normalized replay snapshot for later reuse.
@@ -66,8 +76,6 @@ This file is the source of milestone progress, validation commands, and next act
     - switching between the two replayed sessions in the Web UI no longer mixes first-session messages into the second-session chat.
   - validation:
     - pass: `go test ./internal/agents/codex -run 'Test(CodexShouldDeferInitialSessionBinding|NormalizeCodexSessionListResultUsesStableThreadID|CodexSessionMatchesIDAcceptsStableAndRawIDs|CodexStableSessionIDFallsBackToRawSessionID)$' -count=1`
-    - pass: `cd internal/webui/web && npm run build`
-    - pass: `go test ./...`
 
 ## Previous Update (2026-03-09)
 
@@ -306,8 +314,6 @@ This file is the source of milestone progress, validation commands, and next act
   - implemented transactional storage deletion in `internal/storage` with dependent cleanup (`events` -> `turns` -> `threads`).
   - wired Web UI thread-list delete action with confirmation and local state cleanup (threads/messages/active selection/stream state).
   - executed validation:
-    - pass: `cd internal/webui/web && npm run build`
-    - pass: `go test ./...`
   - added unit tests (`TestPreflight_*`, `TestNew_*`, `TestClose_*`, `TestDefaultRuntimeConfig_ReadsEnv`) covering token presence/absence, default/custom timeouts, and idempotent close.
   - added optional real smoke test (`E2E_CLAUDE=1 go test ./internal/agents/claude/ -run TestClaudeE2ESmoke -v -timeout 120s`); confirmed `PONG` response and `stopReason=end_turn` (16.68s).
   - added `go.mod` `replace` directive pointing to local `github.com/beyond5959/acp-adapter` for local development; refreshed module dependencies for the embedded Claude runtime integration.
@@ -446,8 +452,6 @@ This file is the source of milestone progress, validation commands, and next act
   - maintained per-thread stream runtime maps (stream handle, delta buffer, start time), so background threads can keep streaming and finalize correctly.
   - wired send/cancel/input disable logic to current thread only, enabling concurrent in-flight turns across different threads.
   - executed validation:
-    - pass: `cd internal/webui/web && npm run build`
-    - pass: `go test ./...`
 
 - `Post-F9` permission countdown updated to 2 hours:
   - changed server default permission timeout to `2 * time.Hour`.
@@ -458,8 +462,6 @@ This file is the source of milestone progress, validation commands, and next act
   - when switching back to a thread, pending Permission Required cards are re-mounted with original deadline.
   - resolved/timeout outcomes remove pending records to avoid stale prompts.
   - executed validation:
-    - pass: `cd internal/webui/web && npm run build`
-    - pass: `go test ./...`
 
 - `Post-F9` thread model selection and switching completed:
   - added thread update API `PATCH /v1/threads/{threadId}` (agentOptions-only payload) with ownership checks and active-turn conflict (`409`).
@@ -479,8 +481,6 @@ This file is the source of milestone progress, validation commands, and next act
     - active thread header switched from free-text model input to ACP-backed model dropdown + Apply action.
     - model controls are disabled while model lists load and during streaming turns.
   - executed validation:
-    - pass: `cd internal/webui/web && npm run build`
-    - pass: `go test ./...`
 
 - `Post-F9` thread session model config switched to ACP `configOptions` + immediate apply:
   - added thread-scoped config options APIs:
@@ -498,8 +498,6 @@ This file is the source of milestone progress, validation commands, and next act
   - thread metadata sync:
     - successful model switch persists `agentOptions.modelId` for thread continuity and restart recovery.
   - executed validation:
-    - pass: `cd internal/webui/web && npm run build`
-    - pass: `go test ./...`
 
 - `Post-F9` thread reasoning selector and config override persistence completed:
   - backend now persists non-model session config selections under `agentOptions.configOverrides` when `POST /v1/threads/{threadId}/config-options` succeeds.
@@ -508,8 +506,6 @@ This file is the source of milestone progress, validation commands, and next act
   - reasoning control remains model-specific and is disabled/updated in the same active-turn safety envelope as model switching.
   - added coverage for config override persistence and thread agent-option parsing.
   - executed validation:
-    - pass: `cd internal/webui/web && npm run build`
-    - pass: `go test ./...`
 
 - `Post-F9` shared agent config catalog caching completed:
   - Web UI no longer re-fetches thread config options when switching between threads that use the same agent and already have a cached agent config catalog.
@@ -543,8 +539,6 @@ This file is the source of milestone progress, validation commands, and next act
     - first call `GET /v1/agents/codex/models` took ~16s (initial discovery).
     - second call returned in ~0ms from shared client (no repeated startup/shutdown).
   - executed validation:
-    - pass: `cd internal/webui/web && npm run build`
-    - pass: `go test ./...`
 
 - `Post-F9` persisted agent config catalog completed:
   - added sqlite-backed `agent_config_catalogs` storage keyed by `agent_id + model_id`, with a reserved default snapshot row used when a thread has no explicit model selection yet.
@@ -555,8 +549,6 @@ This file is the source of milestone progress, validation commands, and next act
   - service startup now launches a background catalog refresher that silently re-queries built-in agents and refreshes stored model/reasoning catalogs without delaying frontend availability.
   - Web UI config cache is now keyed by `agent + selected model`, so different threads on the same agent no longer accidentally reuse the wrong reasoning list for another model.
   - executed validation:
-    - pass: `cd internal/webui/web && npm run build`
-    - pass: `go test ./...`
 
 - `Post-F9` streaming bubble typing-indicator persistence completed:
   - Web UI streaming agent bubble now keeps the three animated dots rendered at the bottom of the bubble after the first delta arrives, until the turn finishes.
@@ -571,39 +563,29 @@ This file is the source of milestone progress, validation commands, and next act
   - removed the blank spacer above the three animated dots before the first token arrives by hiding the empty text container in streaming bubbles.
   - typing indicator now sits directly under the top padding until real content starts streaming.
   - executed validation:
-    - pass: `cd internal/webui/web && npm run build`
-    - pass: `go test ./...`
 
 - `Post-F9` sidebar thread activity indicators completed:
   - thread list now shows a live spinner for any thread with an in-flight turn, so background work stays visible after switching to another thread.
   - when a background turn finishes, the spinner flips to a green check badge that stays on that thread until the user opens it again.
   - slowed the sidebar thread spinner slightly so the activity indicator reads as background work instead of a high-frequency busy loop.
   - executed validation:
-    - pass: `cd internal/webui/web && npm run build`
-    - pass: `go test ./...`
 
 - `Post-F9` sidebar thread drawer actions and rename completed:
   - replaced the direct delete icon in sidebar thread rows with a drawer trigger.
   - added drawer actions for inline rename and delete, with rename ordered before delete and delete styled as the only dangerous text action.
   - extended `PATCH /v1/threads/{threadId}` so thread title updates reuse the existing ownership and active-turn conflict model.
   - executed validation:
-    - pass: `cd internal/webui/web && npm run build`
-    - pass: `go test ./...`
 
 - `Post-F9` sidebar thread action popover refinement completed:
   - replaced the expanding inline drawer with a floating popover anchored to the three-dot trigger, so opening thread actions no longer changes sidebar row height.
   - kept rename and delete in the same order, with rename editing rendered in a floating panel and delete remaining the red dangerous action.
   - executed validation:
-    - pass: `cd internal/webui/web && npm run build`
-    - pass: `go test ./...`
 
 - `Post-F9` ACP plan streaming in Web UI completed:
   - added shared ACP `session/update` parsing for both `agent_message_chunk` and `plan`, with plan routed through a new per-turn `PlanHandler` context callback.
   - introduced SSE/history event `plan_update` so ACP plans are persisted alongside other turn events instead of being dropped at provider boundaries.
   - updated the Web UI to render live plan cards during streaming and restore the latest plan from turn history on reload.
   - executed validation:
-    - pass: `cd internal/webui/web && npm run build`
-    - pass: `go test ./...`
 
  
 - 2026-03-06: Removed the thread action trigger's per-thread actionLabel/title tooltip in the Web UI popover menu; the three-dot button now uses a neutral `aria-label` only, without hover text tied to the thread title.

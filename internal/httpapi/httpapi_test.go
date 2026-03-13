@@ -1089,6 +1089,98 @@ func TestTurnSessionBoundPersistsSessionIDAndSkipsContextInjection(t *testing.T)
 	}
 }
 
+func TestNewSessionResetSkipsContextInjection(t *testing.T) {
+	root := t.TempDir()
+	var factoryCalls atomic.Int32
+
+	h := newTestServer(t, testServerOptions{
+		allowedRoots: []string{root},
+		turnAgentFactory: func(thread storage.Thread) (agents.Streamer, error) {
+			_ = thread
+			sessionID := fmt.Sprintf("ses_bound_%d", factoryCalls.Add(1))
+			return &sessionBoundStreamer{sessionID: sessionID}, nil
+		},
+	})
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	threadID := createThreadHTTP(t, ts.URL, "client-a", root)
+
+	first := runTurnStreamRequest(t, ts.URL, "client-a", threadID, "hello one")
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("first turn status = %d, want %d", first.StatusCode, http.StatusOK)
+	}
+
+	resetStatus, resetBody := doJSON(
+		t,
+		http.MethodPatch,
+		ts.URL+"/v1/threads/"+threadID,
+		map[string]any{"agentOptions": map[string]any{}},
+		map[string]string{"X-Client-ID": "client-a"},
+	)
+	if resetStatus != http.StatusOK {
+		t.Fatalf("reset session status = %d, want %d, body=%s", resetStatus, http.StatusOK, resetBody)
+	}
+
+	var resetResp struct {
+		Thread struct {
+			AgentOptions map[string]any `json:"agentOptions"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal([]byte(resetBody), &resetResp); err != nil {
+		t.Fatalf("unmarshal reset response: %v", err)
+	}
+	if got := len(resetResp.Thread.AgentOptions); got != 0 {
+		t.Fatalf("len(reset thread.agentOptions) = %d, want %d", got, 0)
+	}
+
+	second := runTurnStreamRequest(t, ts.URL, "client-a", threadID, "hello two")
+	if second.StatusCode != http.StatusOK {
+		t.Fatalf("second turn status = %d, want %d", second.StatusCode, http.StatusOK)
+	}
+
+	if got := factoryCalls.Load(); got != 2 {
+		t.Fatalf("turn agent factory calls = %d, want %d", got, 2)
+	}
+
+	history := getHistoryHTTP(t, ts.URL, "client-a", threadID, false)
+	if got, want := len(history.Turns), 2; got != want {
+		t.Fatalf("len(history.turns) = %d, want %d", got, want)
+	}
+
+	lastResp := history.Turns[len(history.Turns)-1].ResponseText
+	if got, want := lastResp, "hello two"; got != want {
+		t.Fatalf("second response = %q, want %q", got, want)
+	}
+	if strings.Contains(lastResp, "[Conversation Summary]") {
+		t.Fatalf("second response unexpectedly contains injected summary: %q", lastResp)
+	}
+	if strings.Contains(lastResp, "hello one") {
+		t.Fatalf("second response unexpectedly contains prior turn text: %q", lastResp)
+	}
+
+	threadStatus, threadBody := doJSON(t, http.MethodGet, ts.URL+"/v1/threads/"+threadID, nil, map[string]string{
+		"X-Client-ID": "client-a",
+	})
+	if threadStatus != http.StatusOK {
+		t.Fatalf("get thread status = %d, want %d, body=%s", threadStatus, http.StatusOK, threadBody)
+	}
+	var threadResp struct {
+		Thread struct {
+			AgentOptions map[string]any `json:"agentOptions"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal([]byte(threadBody), &threadResp); err != nil {
+		t.Fatalf("unmarshal thread response: %v", err)
+	}
+	if got := fmt.Sprintf("%v", threadResp.Thread.AgentOptions["sessionId"]); got != "ses_bound_2" {
+		t.Fatalf("thread.agentOptions.sessionId = %q, want %q", got, "ses_bound_2")
+	}
+	if _, exists := threadResp.Thread.AgentOptions[threadAgentOptionFreshSessionKey]; exists {
+		t.Fatalf("thread response unexpectedly exposes %q", threadAgentOptionFreshSessionKey)
+	}
+}
+
 func TestThreadConfigOptionsGetAndSetModel(t *testing.T) {
 	root := t.TempDir()
 	streamer := newConfigOptionStreamer("gpt-5.3-codex", []agents.ConfigOptionValue{
@@ -1788,6 +1880,97 @@ func TestTurnAllowsConcurrentSessionsOnSameThread(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("first session turn did not stop after cancel")
+	}
+}
+
+func TestUpdateThreadClearingSessionDropsStaleUnboundProvider(t *testing.T) {
+	root := t.TempDir()
+	var freshFactoryCalls atomic.Int32
+	freshProvider := &closableSessionBoundStreamer{
+		prefix:    "fresh:",
+		sessionID: "ses-new",
+	}
+	server := newTestServer(t, testServerOptions{
+		allowedRoots: []string{root},
+		turnAgentFactory: func(thread storage.Thread) (agents.Streamer, error) {
+			freshFactoryCalls.Add(1)
+			return freshProvider, nil
+		},
+	})
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	threadID := createThreadHTTP(t, ts.URL, "client-a", root)
+
+	setSessionStatus, setSessionBody := doJSON(
+		t,
+		http.MethodPatch,
+		ts.URL+"/v1/threads/"+threadID,
+		map[string]any{"agentOptions": map[string]any{"sessionId": "ses-old"}},
+		map[string]string{"X-Client-ID": "client-a"},
+	)
+	if setSessionStatus != http.StatusOK {
+		t.Fatalf("set session status = %d, want %d, body=%s", setSessionStatus, http.StatusOK, setSessionBody)
+	}
+
+	staleProvider := &closableSessionBoundStreamer{
+		prefix:    "stale:",
+		sessionID: "ses-stale",
+	}
+	staleScopeKey := threadAgentScopeKeyFromOptions(threadID, "{}")
+	server.agentMu.Lock()
+	server.agentsByScope[staleScopeKey] = &managedAgent{
+		scopeKey: staleScopeKey,
+		threadID: threadID,
+		provider: staleProvider,
+		closer:   staleProvider,
+		lastUsed: time.Now().UTC(),
+	}
+	server.agentMu.Unlock()
+
+	resetSessionStatus, resetSessionBody := doJSON(
+		t,
+		http.MethodPatch,
+		ts.URL+"/v1/threads/"+threadID,
+		map[string]any{"agentOptions": map[string]any{}},
+		map[string]string{"X-Client-ID": "client-a"},
+	)
+	if resetSessionStatus != http.StatusOK {
+		t.Fatalf("reset session status = %d, want %d, body=%s", resetSessionStatus, http.StatusOK, resetSessionBody)
+	}
+	if got := staleProvider.CloseCount(); got != 1 {
+		t.Fatalf("stale provider close count = %d, want %d", got, 1)
+	}
+
+	streamResult := runTurnStreamRequest(t, ts.URL, "client-a", threadID, "hello after reset")
+	if streamResult.StatusCode != http.StatusOK {
+		t.Fatalf("turn stream status = %d, want %d, body=%s", streamResult.StatusCode, http.StatusOK, streamResult.Body)
+	}
+	if got := freshFactoryCalls.Load(); got != 1 {
+		t.Fatalf("fresh provider factory calls = %d, want %d", got, 1)
+	}
+
+	history := getHistoryHTTP(t, ts.URL, "client-a", threadID, false)
+	if got, want := history.Turns[len(history.Turns)-1].ResponseText, "fresh:hello after reset"; got != want {
+		t.Fatalf("response after reset = %q, want %q", got, want)
+	}
+
+	threadStatus, threadBody := doJSON(t, http.MethodGet, ts.URL+"/v1/threads/"+threadID, nil, map[string]string{
+		"X-Client-ID": "client-a",
+	})
+	if threadStatus != http.StatusOK {
+		t.Fatalf("get thread status = %d, want %d, body=%s", threadStatus, http.StatusOK, threadBody)
+	}
+	var threadResp struct {
+		Thread struct {
+			AgentOptions map[string]any `json:"agentOptions"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal([]byte(threadBody), &threadResp); err != nil {
+		t.Fatalf("unmarshal thread response: %v", err)
+	}
+	if got := fmt.Sprintf("%v", threadResp.Thread.AgentOptions["sessionId"]); got != "ses-new" {
+		t.Fatalf("thread.agentOptions.sessionId = %q, want %q", got, "ses-new")
 	}
 }
 
@@ -2586,6 +2769,35 @@ func (s *countingClosableStreamer) Close() error {
 }
 
 func (s *countingClosableStreamer) CloseCount() int32 {
+	return s.closeCalls.Load()
+}
+
+type closableSessionBoundStreamer struct {
+	prefix     string
+	sessionID  string
+	closeCalls atomic.Int32
+}
+
+func (s *closableSessionBoundStreamer) Name() string {
+	return "closable-session-bound-streamer"
+}
+
+func (s *closableSessionBoundStreamer) Stream(ctx context.Context, input string, onDelta func(delta string) error) (agents.StopReason, error) {
+	if err := agents.NotifySessionBound(ctx, s.sessionID); err != nil {
+		return agents.StopReasonEndTurn, err
+	}
+	if err := onDelta(s.prefix + input); err != nil {
+		return agents.StopReasonEndTurn, err
+	}
+	return agents.StopReasonEndTurn, nil
+}
+
+func (s *closableSessionBoundStreamer) Close() error {
+	s.closeCalls.Add(1)
+	return nil
+}
+
+func (s *closableSessionBoundStreamer) CloseCount() int32 {
 	return s.closeCalls.Load()
 }
 

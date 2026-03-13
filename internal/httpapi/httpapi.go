@@ -118,6 +118,8 @@ const (
 	defaultCompactMaxChars    = 4000
 	defaultAgentIdleTTL       = 5 * time.Minute
 	defaultPermissionTimeout  = 2 * time.Hour
+
+	threadAgentOptionFreshSessionKey = "_ngentFreshSession"
 )
 
 const (
@@ -564,6 +566,8 @@ func (s *Server) handleUpdateThread(w http.ResponseWriter, r *http.Request, clie
 
 	agentOptionsJSON := ""
 	sessionOnlyUpdate := false
+	currentSessionID := threadSessionID(thread.AgentOptionsJSON)
+	currentFreshSession := threadFreshSessionRequested(thread.AgentOptionsJSON)
 	if req.AgentOptions != nil {
 		var err error
 		agentOptionsJSON, err = normalizeAgentOptions(*req.AgentOptions)
@@ -572,6 +576,21 @@ func (s *Server) handleUpdateThread(w http.ResponseWriter, r *http.Request, clie
 			return
 		}
 		sessionOnlyUpdate, err = isSessionOnlyAgentOptionsUpdate(thread.AgentOptionsJSON, agentOptionsJSON)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, "agentOptions must be a JSON object", map[string]any{"field": "agentOptions"})
+			return
+		}
+
+		nextSessionID := threadSessionID(agentOptionsJSON)
+		shouldRequestFreshSession := currentFreshSession
+		switch {
+		case nextSessionID != "":
+			shouldRequestFreshSession = false
+		case currentSessionID != "":
+			shouldRequestFreshSession = true
+		}
+
+		agentOptionsJSON, _, err = withThreadFreshSessionRequested(agentOptionsJSON, shouldRequestFreshSession)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, codeInvalidArgument, "agentOptions must be a JSON object", map[string]any{"field": "agentOptions"})
 			return
@@ -606,6 +625,13 @@ func (s *Server) handleUpdateThread(w http.ResponseWriter, r *http.Request, clie
 			return
 		}
 
+		nextSessionID := threadSessionID(agentOptionsJSON)
+		if sessionOnlyUpdate && currentSessionID != nextSessionID && nextSessionID == "" {
+			s.closeThreadAgentScope(thread.ThreadID, agentOptionsJSON, "thread_session_reset")
+			if plainAgentOptionsJSON, changed, err := withThreadFreshSessionRequested(agentOptionsJSON, false); err == nil && changed {
+				s.closeThreadAgentScope(thread.ThreadID, plainAgentOptionsJSON, "thread_session_reset")
+			}
+		}
 		if !sessionOnlyUpdate {
 			s.closeThreadAgents(thread.ThreadID, "thread_updated")
 		}
@@ -1834,6 +1860,42 @@ func (s *Server) closeThreadAgents(threadID, reason string) {
 	}
 }
 
+func (s *Server) closeThreadAgentScope(threadID, agentOptionsJSON, reason string) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+
+	sessionID := threadSessionID(agentOptionsJSON)
+	if s.turns.IsSessionActive(threadID, sessionID) {
+		return
+	}
+
+	scopeKey := threadAgentScopeKeyFromOptions(threadID, agentOptionsJSON)
+
+	var item *managedAgent
+	s.agentMu.Lock()
+	entry, ok := s.agentsByScope[scopeKey]
+	if ok {
+		delete(s.agentsByScope, scopeKey)
+		item = entry
+	}
+	s.agentMu.Unlock()
+	if item == nil {
+		return
+	}
+
+	if item.closer != nil {
+		_ = item.closer.Close()
+	}
+	s.logger.Info("agent.closed",
+		"threadId", item.threadID,
+		"sessionId", item.sessionID,
+		"agentName", item.provider.Name(),
+		"reason", reason,
+	)
+}
+
 func (s *Server) rebindManagedAgentScope(threadID, fromAgentOptionsJSON, toAgentOptionsJSON string) error {
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
@@ -1865,7 +1927,7 @@ func (s *Server) rebindManagedAgentScope(threadID, fromAgentOptionsJSON, toAgent
 }
 
 func (s *Server) buildInjectedPrompt(ctx context.Context, thread storage.Thread, input string) (string, error) {
-	if threadSessionID(thread.AgentOptionsJSON) != "" {
+	if threadSessionID(thread.AgentOptionsJSON) != "" || threadFreshSessionRequested(thread.AgentOptionsJSON) {
 		return strings.TrimSpace(input), nil
 	}
 
@@ -2120,11 +2182,8 @@ func (p *pendingPermission) Resolve(outcome agents.PermissionOutcome) bool {
 }
 
 func toThreadResponse(thread storage.Thread) (threadResponse, error) {
-	raw := json.RawMessage(thread.AgentOptionsJSON)
-	if len(strings.TrimSpace(thread.AgentOptionsJSON)) == 0 {
-		raw = json.RawMessage(`{}`)
-	}
-	if !json.Valid(raw) {
+	raw, err := sanitizeThreadAgentOptionsForResponse(thread.AgentOptionsJSON)
+	if err != nil {
 		return threadResponse{}, fmt.Errorf("invalid agent_options_json for thread %s", thread.ThreadID)
 	}
 
@@ -2531,6 +2590,19 @@ func threadSessionID(agentOptionsJSON string) string {
 	return strings.TrimSpace(raw.SessionID)
 }
 
+func threadFreshSessionRequested(agentOptionsJSON string) bool {
+	var raw struct {
+		FreshSession bool `json:"_ngentFreshSession"`
+	}
+	if strings.TrimSpace(agentOptionsJSON) == "" {
+		return false
+	}
+	if err := json.Unmarshal([]byte(agentOptionsJSON), &raw); err != nil {
+		return false
+	}
+	return raw.FreshSession
+}
+
 func withoutThreadSessionID(agentOptionsJSON string) (string, error) {
 	objectValue := map[string]any{}
 	trimmed := strings.TrimSpace(agentOptionsJSON)
@@ -2541,6 +2613,7 @@ func withoutThreadSessionID(agentOptionsJSON string) (string, error) {
 	}
 
 	delete(objectValue, "sessionId")
+	delete(objectValue, threadAgentOptionFreshSessionKey)
 	normalized, err := json.Marshal(objectValue)
 	if err != nil {
 		return "", err
@@ -2562,7 +2635,7 @@ func isSessionOnlyAgentOptionsUpdate(currentAgentOptionsJSON, nextAgentOptionsJS
 
 func withThreadSessionID(agentOptionsJSON, sessionID string) (string, bool, error) {
 	sessionID = strings.TrimSpace(sessionID)
-	currentSessionID := threadSessionID(agentOptionsJSON)
+	previousNormalized := normalizeThreadAgentOptionsForScope(agentOptionsJSON)
 
 	objectValue := map[string]any{}
 	trimmed := strings.TrimSpace(agentOptionsJSON)
@@ -2576,13 +2649,57 @@ func withThreadSessionID(agentOptionsJSON, sessionID string) (string, bool, erro
 		delete(objectValue, "sessionId")
 	} else {
 		objectValue["sessionId"] = sessionID
+		delete(objectValue, threadAgentOptionFreshSessionKey)
 	}
 
 	normalized, err := json.Marshal(objectValue)
 	if err != nil {
 		return "", false, err
 	}
-	return string(normalized), sessionID != currentSessionID, nil
+	nextNormalized := string(normalized)
+	return nextNormalized, previousNormalized != nextNormalized, nil
+}
+
+func withThreadFreshSessionRequested(agentOptionsJSON string, fresh bool) (string, bool, error) {
+	previousNormalized := normalizeThreadAgentOptionsForScope(agentOptionsJSON)
+
+	objectValue := map[string]any{}
+	trimmed := strings.TrimSpace(agentOptionsJSON)
+	if trimmed != "" {
+		if err := json.Unmarshal([]byte(trimmed), &objectValue); err != nil {
+			return "", false, err
+		}
+	}
+
+	if fresh {
+		objectValue[threadAgentOptionFreshSessionKey] = true
+	} else {
+		delete(objectValue, threadAgentOptionFreshSessionKey)
+	}
+
+	normalized, err := json.Marshal(objectValue)
+	if err != nil {
+		return "", false, err
+	}
+	nextNormalized := string(normalized)
+	return nextNormalized, previousNormalized != nextNormalized, nil
+}
+
+func sanitizeThreadAgentOptionsForResponse(agentOptionsJSON string) (json.RawMessage, error) {
+	objectValue := map[string]any{}
+	trimmed := strings.TrimSpace(agentOptionsJSON)
+	if trimmed != "" {
+		if err := json.Unmarshal([]byte(trimmed), &objectValue); err != nil {
+			return nil, err
+		}
+	}
+
+	delete(objectValue, threadAgentOptionFreshSessionKey)
+	normalized, err := json.Marshal(objectValue)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(normalized), nil
 }
 
 func applyThreadConfigSelections(

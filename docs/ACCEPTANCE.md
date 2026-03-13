@@ -30,7 +30,7 @@ This checklist defines executable acceptance checks for requirements 1-16.
 - Operation: start first turn, submit second turn on same session, verify conflict; then switch to another session on the same thread and verify that second session can run concurrently; finally cancel.
 - Expected: same-session second turn gets `409 CONFLICT`; different session on the same thread is allowed; cancel converges quickly.
 - Verification command:
-  - `go test ./internal/httpapi -run 'TestTurnConflictSingleActiveTurnPerSession|TestTurnAllowsConcurrentSessionsOnSameThread' -count=1`
+  - `go test ./internal/httpapi -run 'TestTurnConflictSingleActiveTurnPerSession|TestTurnAllowsConcurrentSessionsOnSameThread|TestUpdateThreadClearingSessionDropsStaleUnboundProvider' -count=1`
   - `go test ./internal/httpapi -run TestTurnCancel -count=1`
 
 ## Requirement 5: Lazy startup
@@ -217,6 +217,8 @@ This checklist defines executable acceptance checks for requirements 1-16.
   - same-agent threads do not share selected current values, but can reuse the same stored catalog data for the same selected model.
   - title/model/config mutations are rejected with `409 CONFLICT` while any session on the thread is active.
   - session-only selection updates remain allowed when they switch to a different session.
+  - clearing `sessionId` from the Web UI `New session` action invalidates any stale empty-session provider cache so the next turn does not fall back into an older ACP session.
+  - if that clear happens after an explicit historical-session selection, the first turn of the fresh session is sent without `[Conversation Summary]` / `[Recent Turns]` injection, so the new ACP session transcript contains only the new exchange.
 - Verification commands (executed 2026-03-06):
   - `go test ./internal/httpapi -run TestThreadConfigOptions -count=1`
   - `go test ./internal/httpapi -run TestThreadConfigOptionsPersistConfigOverrides -count=1`
@@ -303,8 +305,8 @@ This checklist defines executable acceptance checks for requirements 1-16.
   - selecting an existing session requests provider-owned transcript replay before the next turn.
   - turn SSE emits `session_bound`, and the thread persists `agentOptions.sessionId`.
   - once a thread is session-bound, subsequent prompt building no longer injects prior local turns into the provider prompt.
-- Verification commands (executed 2026-03-11):
-  - `go test ./internal/httpapi -run 'TestThreadSessionsListEndpoint|TestTurnSessionBoundPersistsSessionIDAndSkipsContextInjection' -count=1`
+- Verification commands (executed 2026-03-13):
+  - `go test ./internal/httpapi -run 'TestThreadSessionsListEndpoint|TestTurnSessionBoundPersistsSessionIDAndSkipsContextInjection|TestNewSessionResetSkipsContextInjection' -count=1`
   - `cd internal/webui/web && npm run build`
   - `go test ./...`
 - Additional verification commands (executed 2026-03-12):

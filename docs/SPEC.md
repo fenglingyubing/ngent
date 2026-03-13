@@ -41,6 +41,8 @@ Modules:
 - Embedded runtime `session/new` is created with `cwd=thread.cwd` (validated as absolute path at thread creation).
 - If `thread.agent_options_json` contains `modelId`, providers apply it as model override during thread-level runtime/session initialization.
 - Provider instances are cached per thread/session/config scope and reclaimed by idle TTL (`--agent-idle-ttl`) when that scope has no active turn.
+- Clearing `thread.agent_options_json.sessionId` to represent Web UI `New session` also invalidates any idle cached provider under the provisional empty-session scope so the following turn must resolve a fresh ACP session.
+- Explicit Web UI `New session` also persists one internal fresh-session marker until the next `session_bound`; while that marker is set, ngent skips `[Conversation Summary]` / `[Recent Turns]` prompt injection and sends raw user input into the fresh ACP session.
 
 ## 5. Permission Bridge
 
@@ -400,6 +402,7 @@ and upstream ACP schema:
 - Session selection remains a normal thread metadata update:
   - `PATCH /v1/threads/{threadId}` with `agentOptions.sessionId="<existing>"` binds an existing ACP session.
   - `PATCH /v1/threads/{threadId}` with `agentOptions.sessionId` omitted/empty clears the binding and means "create a new session on next turn".
+  - when that clear transitions from a previously bound session to empty, ngent records an internal fresh-session marker so the first turn of the new session does not inherit prior thread prompt wrappers.
 
 ### 15.3 Provider Behavior
 
@@ -409,6 +412,7 @@ and upstream ACP schema:
 - Turn setup:
   - if thread `sessionId` is present, provider calls ACP `session/load`.
   - otherwise provider calls ACP `session/new`.
+  - if the thread is in explicit fresh-session mode, the first prompt sent into that new ACP session is the raw user input instead of a locally wrapped context prompt.
   - provider reports the effective session id back through a thread-scoped callback.
 - Session transcript replay:
   - providers may optionally expose replayable transcript messages for one selected session through `GET /v1/threads/{threadId}/session-history`.
