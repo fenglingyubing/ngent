@@ -46,6 +46,56 @@
 - ADR-042: Treat explicit Web UI "New session" as a fresh turn with no injected thread context. (Accepted)
 - ADR-043: Share one ACP CLI driver across Kimi/Qwen/OpenCode/Gemini. (Accepted)
 - ADR-044: Normalize path-like ACP permission previews across direct ACP providers. (Accepted)
+- ADR-045: Surface hidden agent reasoning as first-class SSE/history events in the Web UI. (Accepted)
+- ADR-046: Collapse finalized Web UI thinking panels by default. (Accepted)
+
+## ADR-046: Collapse Finalized Web UI Thinking Panels by Default
+
+- Status: Accepted
+- Date: 2026-03-14
+- Context:
+  - ADR-045 made hidden reasoning visible in the Web UI, but a fully expanded reasoning block on every completed agent message made longer threads harder to scan.
+  - the product still needs live reasoning to stay visible while the turn is actively streaming.
+  - the message list is re-rendered from store state, so manual expand/collapse choice needs explicit local UI tracking if it should survive later store updates.
+- Decision:
+  - render reasoning inside a lightweight inline `Thinking` toggle modeled after the Kimi Web UI `Thought` block pattern instead of a heavy bordered card.
+  - use a sparkles icon + italic label + rotating chevron trigger, with expanded content shown as indented text behind a left border.
+  - use tense-sensitive labels: live reasoning stays `Thinking`, and finalized reasoning switches to `Thought`.
+  - render finalized reasoning with the same sanitized markdown pipeline used for finalized assistant messages, while keeping in-flight reasoning as plain text during streaming.
+  - keep the streaming panel expanded while `reasoning_delta` is still arriving.
+  - once the turn is finalized into message history, render the panel collapsed by default.
+  - preserve manual expand/collapse state for finalized messages in page-local UI state across later list re-renders.
+- Consequences:
+  - active reasoning remains visible during execution, but completed threads are denser and easier to review.
+  - markdown affordances such as headings, lists, links, and code blocks now render consistently inside finalized `Thinking` content.
+  - collapse state is a local Web UI concern and is not persisted into server-side turn history.
+  - page reload still returns to the default product behavior: finalized thinking starts collapsed.
+- Alternatives considered:
+  - keep finalized reasoning always expanded (rejected: too noisy for longer chats).
+  - collapse reasoning immediately even during streaming (rejected: hides the live signal users asked to watch).
+  - persist expand/collapse state in backend history (rejected: presentation state does not belong in the turn/event model).
+
+## ADR-045: Surface Hidden Agent Reasoning as First-Class SSE/History Events in the Web UI
+
+- Status: Accepted
+- Date: 2026-03-14
+- Context:
+  - shared ACP update parsing already recognized provider thought chunks such as `thought_message_chunk` and `agent_thought_chunk`, but the turn pipeline only forwarded visible assistant text through `message_delta`.
+  - as a result, hidden reasoning emitted by supporting agents was discarded before it reached SSE clients or persisted turn history, so the Web UI could not show it during streaming or after reload.
+  - merging reasoning into `responseText` would blur the boundary between visible assistant output and hidden provider reasoning.
+- Decision:
+  - add a context-bound reasoning callback in `internal/agents`, parallel to the existing plan/session/permission callback pattern.
+  - route ACP thought chunks into that callback from the shared ACP notification handler.
+  - persist and stream reasoning as a separate `reasoning_delta` event in the HTTP API layer, without changing `responseText`.
+  - reconstruct reasoning in the Web UI from live `reasoning_delta` SSE events and from persisted turn `events[]`, rendering it in a dedicated `Thinking` section above the final assistant answer.
+- Consequences:
+  - users can see reasoning for ngent-created turns both live and from history reloads.
+  - `responseText` remains the visible assistant answer only, so existing prompt-compaction/history semantics stay stable.
+  - provider-owned transcript replay returned by `/session-history` still contains only visible user/assistant messages; hidden reasoning for historical external sessions is not backfilled there.
+- Alternatives considered:
+  - append reasoning directly into `responseText` (rejected: mixes two different product surfaces and would break existing history assumptions).
+  - keep reasoning UI-only without persisting it in turn events (rejected: reload/history would lose the data).
+  - add a separate top-level reasoning column to `turns` (rejected: event log already models streamed deltas cleanly and preserves ordering).
 
 ## ADR-044: Normalize Path-Like ACP Permission Previews Across Direct ACP Providers
 

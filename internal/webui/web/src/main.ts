@@ -18,7 +18,13 @@ import type {
   SessionInfo,
   SessionTranscriptMessage,
 } from './types.ts'
-import type { TurnStream, PermissionRequiredPayload, PlanUpdatePayload, SessionBoundPayload } from './sse.ts'
+import type {
+  TurnStream,
+  PermissionRequiredPayload,
+  PlanUpdatePayload,
+  ReasoningDeltaPayload,
+  SessionBoundPayload,
+} from './sse.ts'
 import { copyText, escHtml, formatRelativeTime, formatTimestamp, generateUUID } from './utils.ts'
 
 // ── Theme ─────────────────────────────────────────────────────────────────
@@ -72,6 +78,17 @@ const iconSlashCommand = `<svg width="14" height="14" viewBox="0 0 24 24" fill="
 const iconRefresh = `<svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
   <path d="M12.5 7.5a5 5 0 1 1-1.47-3.53" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
   <path d="M12.5 2.5v3h-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`
+
+const iconSparkles = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+  <path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M20 2v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M22 4h-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <circle cx="4" cy="20" r="1.6" fill="currentColor"/>
+</svg>`
+
+const iconChevronRight = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+  <path d="m9 18 6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`
 
 const codexIconURL = '/codex-icon.png'
@@ -184,6 +201,10 @@ function clonePlanEntries(entries: PlanEntry[] | null | undefined): PlanEntry[] 
   return cloned.length ? cloned : undefined
 }
 
+function hasReasoningText(value: string | null | undefined): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
 function normalizeAgentKey(agentId: string): string {
   return agentId.trim().toLowerCase()
 }
@@ -250,6 +271,16 @@ function extractTurnPlanEntries(events: TurnEvent[] | undefined): PlanEntry[] | 
     latest = parsePlanEntries(event.data.entries)
   }
   return clonePlanEntries(latest)
+}
+
+function extractTurnReasoning(events: TurnEvent[] | undefined): string {
+  let reasoning = ''
+  for (const event of events ?? []) {
+    if (event.type !== 'reasoning_delta' && event.type !== 'thought_delta') continue
+    if (typeof event.data.delta !== 'string') continue
+    reasoning += event.data.delta
+  }
+  return reasoning
 }
 
 function hasAgentConfigCatalog(agentId: string, modelId = ''): boolean {
@@ -387,6 +418,7 @@ let activeStreamScopeKey = ''
 const streamsByScope = new Map<string, TurnStream>()
 const streamBufferByScope = new Map<string, string>()
 const streamPlanByScope = new Map<string, PlanEntry[]>()
+const streamReasoningByScope = new Map<string, string>()
 const streamStartedAtByScope = new Map<string, string>()
 type PendingPermission = PermissionRequiredPayload & { deadlineMs: number }
 const pendingPermissionsByScope = new Map<string, Map<string, PendingPermission>>()
@@ -398,6 +430,8 @@ let lastRenderThreadId: string | null = null
 let lastRenderChatScopeKey = ''
 /** Chat scope keys whose filtered history was loaded. */
 const loadedHistoryScopeKeys = new Set<string>()
+/** Message ids whose final Thinking panel is currently expanded in the UI. */
+const expandedReasoningMessageIds = new Set<string>()
 let openThreadActionMenuId: string | null = null
 let renamingThreadId: string | null = null
 let renamingThreadDraft = ''
@@ -721,10 +755,11 @@ function appendOrRestoreStreamingBubble(thread: Thread): void {
   div.className = 'message message--agent'
   div.dataset.msgId = streamState.messageId
   const livePlanEntries = streamPlanByScope.get(scopeKey)
+  const liveReasoning = streamReasoningByScope.get(scopeKey) ?? ''
   div.innerHTML = `
     <div class="message-avatar">${avatar}</div>
     <div class="message-group">
-      ${renderStreamingBubbleHTML(streamState.messageId, '', livePlanEntries)}
+      ${renderStreamingBubbleHTML(streamState.messageId, '', livePlanEntries, liveReasoning)}
       <div class="message-meta">
         <span class="message-time">${formatTimestamp(startedAt)}</span>
       </div>
@@ -738,6 +773,7 @@ function appendOrRestoreStreamingBubble(thread: Thread): void {
   if (buffered) {
     updateStreamingBubbleContent(streamState.messageId, buffered)
   }
+  updateStreamingBubbleReasoning(streamState.messageId, liveReasoning)
   updateStreamingBubblePlan(streamState.messageId, livePlanEntries)
   listEl.scrollTop = listEl.scrollHeight
 }
@@ -746,6 +782,7 @@ function clearScopeStreamRuntime(scopeKey: string): void {
   streamsByScope.delete(scopeKey)
   streamBufferByScope.delete(scopeKey)
   streamPlanByScope.delete(scopeKey)
+  streamReasoningByScope.delete(scopeKey)
   streamStartedAtByScope.delete(scopeKey)
   setScopeStreamState(scopeKey, null)
   if (activeChatScopeKey() === scopeKey) {
@@ -774,6 +811,11 @@ function rebindScopeRuntime(oldScopeKey: string, nextScopeKey: string, nextSessi
     const plans = streamPlanByScope.get(oldScopeKey) ?? []
     streamPlanByScope.delete(oldScopeKey)
     streamPlanByScope.set(nextScopeKey, plans)
+  }
+  if (streamReasoningByScope.has(oldScopeKey)) {
+    const reasoning = streamReasoningByScope.get(oldScopeKey) ?? ''
+    streamReasoningByScope.delete(oldScopeKey)
+    streamReasoningByScope.set(nextScopeKey, reasoning)
   }
   if (streamStartedAtByScope.has(oldScopeKey)) {
     const startedAt = streamStartedAtByScope.get(oldScopeKey) ?? ''
@@ -1721,6 +1763,7 @@ function turnsToMessages(turns: Turn[]): Message[] {
 
     if (t.status !== 'running') {
       const planEntries = extractTurnPlanEntries(t.events)
+      const reasoning = extractTurnReasoning(t.events)
       const agentStatus: Message['status'] =
         t.status === 'cancelled' ? 'cancelled' :
         t.status === 'error'     ? 'error'     :
@@ -1736,6 +1779,7 @@ function turnsToMessages(turns: Turn[]): Message[] {
         stopReason:   t.stopReason   || undefined,
         errorMessage: t.errorMessage || undefined,
         planEntries,
+        reasoning: hasReasoningText(reasoning) ? reasoning : undefined,
       })
     }
   }
@@ -1931,6 +1975,56 @@ function renderPlanSectionHTML(entries: PlanEntry[] | undefined, extraClass = ''
   return `<div class="message-plan${extraClass}">${renderPlanInnerHTML(normalized)}</div>`
 }
 
+function reasoningPanelState(expanded: boolean): 'open' | 'closed' {
+  return expanded ? 'open' : 'closed'
+}
+
+function reasoningContentID(messageID: string): string {
+  return `reasoning-content-${messageID}`
+}
+
+function renderReasoningSectionHTML(
+  messageID: string,
+  reasoning: string | undefined,
+  extraClass = '',
+  expanded = false,
+  renderMarkdownContent = false,
+  label = 'Thinking',
+): string {
+  if (!hasReasoningText(reasoning)) return ''
+  const state = reasoningPanelState(expanded)
+  const contentID = reasoningContentID(messageID)
+  const contentClass = renderMarkdownContent
+    ? 'message-reasoning__content message-reasoning__content--md'
+    : 'message-reasoning__content'
+  const contentHTML = renderMarkdownContent ? renderMarkdown(reasoning) : escHtml(reasoning)
+  return `
+    <div
+      class="message-reasoning${extraClass}"
+      data-message-id="${escHtml(messageID)}"
+      data-state="${state}"
+    >
+      <button
+        class="message-reasoning__toggle"
+        type="button"
+        data-message-id="${escHtml(messageID)}"
+        data-state="${state}"
+        aria-expanded="${expanded ? 'true' : 'false'}"
+        aria-controls="${escHtml(contentID)}"
+      >
+        <span class="message-reasoning__icon" aria-hidden="true">${iconSparkles}</span>
+        <span class="message-reasoning__header">${escHtml(label)}</span>
+        <span class="message-reasoning__chevron" aria-hidden="true">${iconChevronRight}</span>
+      </button>
+      <div
+        class="${contentClass}"
+        id="${escHtml(contentID)}"
+        data-state="${state}"
+        ${expanded ? '' : 'hidden'}
+      >${contentHTML}</div>
+    </div>`
+}
+
 function renderMessage(msg: Message, agentAvatar: string): string {
   const renderMessageCopyBtn = (text: string): string => `
     <button
@@ -1963,7 +2057,16 @@ function renderMessage(msg: Message, agentAvatar: string): string {
     ? (msg.errorCode ? `[${msg.errorCode}] ` : '') + (msg.errorMessage ?? 'Unknown error')
     : (msg.content || '…')
   const planHTML = renderPlanSectionHTML(msg.planEntries)
-  const shouldRenderBubble = !(isDone && !msg.content && !!msg.planEntries?.length)
+  const reasoningHTML = renderReasoningSectionHTML(
+    msg.id,
+    msg.reasoning,
+    '',
+    expandedReasoningMessageIds.has(msg.id),
+    true,
+    'Thought',
+  )
+  const hasSupplementarySections = !!msg.planEntries?.length || hasReasoningText(msg.reasoning)
+  const shouldRenderBubble = !(isDone && !msg.content && hasSupplementarySections)
 
   // Render markdown only for finalised done messages
   let bubbleExtra = ''
@@ -1990,6 +2093,7 @@ function renderMessage(msg: Message, agentAvatar: string): string {
       <div class="message-avatar">${agentAvatar}</div>
       <div class="message-group">
         ${planHTML}
+        ${reasoningHTML}
         ${bubbleHTML}
         <div class="message-meta">
           <span class="message-time">${formatTimestamp(msg.timestamp)}</span>
@@ -2000,11 +2104,14 @@ function renderMessage(msg: Message, agentAvatar: string): string {
     </div>`
 }
 
-function renderStreamingBubbleHTML(messageID: string, content = '', planEntries?: PlanEntry[]): string {
+function renderStreamingBubbleHTML(messageID: string, content = '', planEntries?: PlanEntry[], reasoning?: string): string {
   const normalizedPlanEntries = clonePlanEntries(planEntries)
   const planHiddenAttr = normalizedPlanEntries?.length ? '' : ' hidden'
+  const reasoningHTML = renderReasoningSectionHTML(messageID, reasoning, ' message-reasoning--streaming', true)
+  const reasoningHiddenAttr = hasReasoningText(reasoning) ? '' : ' hidden'
   return `
     <div class="message-plan message-plan--streaming" id="plan-${escHtml(messageID)}"${planHiddenAttr}>${normalizedPlanEntries ? renderPlanInnerHTML(normalizedPlanEntries) : ''}</div>
+    <div id="reasoning-${escHtml(messageID)}"${reasoningHiddenAttr}>${reasoningHTML}</div>
     <div class="message-bubble message-bubble--streaming" id="bubble-${escHtml(messageID)}">
       <div class="message-bubble__text">${escHtml(content)}</div>
       <div class="typing-indicator" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -2017,6 +2124,53 @@ function updateStreamingBubbleContent(messageID: string, content: string): void 
   const contentEl = bubbleEl.querySelector('.message-bubble__text')
   if (!contentEl) return
   contentEl.textContent = content
+}
+
+function updateStreamingBubbleReasoning(messageID: string, reasoning: string): void {
+  const reasoningEl = document.getElementById(`reasoning-${messageID}`)
+  if (!reasoningEl) return
+  if (!hasReasoningText(reasoning)) {
+    reasoningEl.hidden = true
+    reasoningEl.innerHTML = ''
+    return
+  }
+  reasoningEl.hidden = false
+  reasoningEl.innerHTML = renderReasoningSectionHTML(messageID, reasoning, ' message-reasoning--streaming', true)
+}
+
+function setReasoningPanelExpanded(panelEl: HTMLElement, expanded: boolean): void {
+  const state = reasoningPanelState(expanded)
+  panelEl.dataset.state = state
+
+  const toggleEl = panelEl.querySelector<HTMLButtonElement>('.message-reasoning__toggle')
+  if (toggleEl) {
+    toggleEl.dataset.state = state
+    toggleEl.setAttribute('aria-expanded', expanded ? 'true' : 'false')
+  }
+
+  const contentEl = panelEl.querySelector<HTMLElement>('.message-reasoning__content')
+  if (contentEl) {
+    contentEl.dataset.state = state
+    contentEl.hidden = !expanded
+  }
+}
+
+function bindReasoningPanels(listEl: HTMLElement): void {
+  listEl.querySelectorAll<HTMLButtonElement>('.message-reasoning__toggle[data-message-id]').forEach(toggleEl => {
+    toggleEl.addEventListener('click', () => {
+      const messageID = toggleEl.dataset.messageId?.trim() ?? ''
+      const panelEl = toggleEl.closest<HTMLElement>('.message-reasoning')
+      if (!messageID || !panelEl || panelEl.classList.contains('message-reasoning--streaming')) return
+
+      const nextExpanded = toggleEl.getAttribute('aria-expanded') !== 'true'
+      if (nextExpanded) {
+        expandedReasoningMessageIds.add(messageID)
+      } else {
+        expandedReasoningMessageIds.delete(messageID)
+      }
+      setReasoningPanelExpanded(panelEl, nextExpanded)
+    })
+  })
 }
 
 function updateStreamingBubblePlan(messageID: string, entries: PlanEntry[] | undefined): void {
@@ -2055,6 +2209,7 @@ function updateMessageList(): void {
 
   listEl.innerHTML = msgs.map(m => renderMessage(m, agentAvatar)).join('')
   bindMarkdownControls(listEl)
+  bindReasoningPanels(listEl)
   listEl.scrollTop = listEl.scrollHeight
   // Sync scroll button (we just moved to the bottom)
   const scrollBtn = document.getElementById('scroll-bottom-btn')
@@ -2823,6 +2978,7 @@ function handleSend(): void {
   activeStreamScopeKey = capturedScopeKey
   streamBufferByScope.set(capturedScopeKey, '')
   streamPlanByScope.delete(capturedScopeKey)
+  streamReasoningByScope.delete(capturedScopeKey)
   streamStartedAtByScope.set(capturedScopeKey, now)
   setScopeStreamState(capturedScopeKey, {
     turnId: '',
@@ -2842,7 +2998,7 @@ function handleSend(): void {
     div.innerHTML = `
       <div class="message-avatar">${agentAvatar}</div>
       <div class="message-group">
-        ${renderStreamingBubbleHTML(agentMsgID)}
+        ${renderStreamingBubbleHTML(agentMsgID, '', undefined, '')}
         <div class="message-meta">
           <span class="message-time">${formatTimestamp(now)}</span>
         </div>
@@ -2869,6 +3025,18 @@ function handleSend(): void {
       const list      = document.getElementById('message-list')
       const atBottom  = !list || isNearBottom(list)
       updateStreamingBubbleContent(agentMsgID, next)
+      if (atBottom && list) list.scrollTop = list.scrollHeight
+    },
+
+    onReasoningDelta({ delta }: ReasoningDeltaPayload) {
+      const previous = streamReasoningByScope.get(capturedScopeKey) ?? ''
+      const next = previous + delta
+      streamReasoningByScope.set(capturedScopeKey, next)
+
+      if (activeChatScopeKey() !== capturedScopeKey) return
+      const list = document.getElementById('message-list')
+      const atBottom = !list || isNearBottom(list)
+      updateStreamingBubbleReasoning(agentMsgID, next)
       if (atBottom && list) list.scrollTop = list.scrollHeight
     },
 
@@ -2902,6 +3070,7 @@ function handleSend(): void {
       // Clear stream tracking BEFORE addMessageToStore (so subscribe calls updateMessageList)
       const finalContent = streamBufferByScope.get(capturedScopeKey) ?? ''
       const finalPlanEntries = clonePlanEntries(streamPlanByScope.get(capturedScopeKey))
+      const finalReasoning = streamReasoningByScope.get(capturedScopeKey) ?? ''
       clearScopeStreamRuntime(capturedScopeKey)
       clearPendingPermissions(capturedScopeKey)
       markThreadCompletionBadge(capturedThreadID)
@@ -2916,12 +3085,14 @@ function handleSend(): void {
         status:     stopReason === 'cancelled' ? 'cancelled' : 'done',
         stopReason,
         planEntries: finalPlanEntries,
+        reasoning: hasReasoningText(finalReasoning) ? finalReasoning : undefined,
       })
     },
 
     onError({ code, message: msg }) {
       const partialContent = streamBufferByScope.get(capturedScopeKey) ?? ''
       const finalPlanEntries = clonePlanEntries(streamPlanByScope.get(capturedScopeKey))
+      const finalReasoning = streamReasoningByScope.get(capturedScopeKey) ?? ''
       clearScopeStreamRuntime(capturedScopeKey)
       clearPendingPermissions(capturedScopeKey)
       void loadThreadSessions(capturedThreadID)
@@ -2936,12 +3107,14 @@ function handleSend(): void {
         errorCode:    code,
         errorMessage: msg,
         planEntries:  finalPlanEntries,
+        reasoning:    hasReasoningText(finalReasoning) ? finalReasoning : undefined,
       })
     },
 
     onDisconnect() {
       const partialContent = streamBufferByScope.get(capturedScopeKey) ?? ''
       const finalPlanEntries = clonePlanEntries(streamPlanByScope.get(capturedScopeKey))
+      const finalReasoning = streamReasoningByScope.get(capturedScopeKey) ?? ''
       clearScopeStreamRuntime(capturedScopeKey)
       clearPendingPermissions(capturedScopeKey)
       void loadThreadSessions(capturedThreadID)
@@ -2955,6 +3128,7 @@ function handleSend(): void {
         status:       'error',
         errorMessage: 'Connection lost',
         planEntries:  finalPlanEntries,
+        reasoning:    hasReasoningText(finalReasoning) ? finalReasoning : undefined,
       })
     },
   })

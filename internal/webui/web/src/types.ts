@@ -100,6 +100,7 @@ export interface Message {
   id: string
   role: MessageRole
   content: string
+  reasoning?: string
   /** ISO-8601 string */
   timestamp: string
   status: MessageStatus

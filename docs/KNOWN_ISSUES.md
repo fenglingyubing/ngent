@@ -308,3 +308,26 @@
   - inspect `/history?includeEvents=1` if you need to confirm that the turn did emit `permission_required` before completion.
 - Follow-up plan:
   - decide whether denied-permission turns should persist a lightweight terminal message, or whether the Web UI should keep the resolved permission card visible after turn completion.
+
+- ID: KI-030
+- Title: Provider-owned historical session replay still omits hidden reasoning
+- Status: Open
+- Severity: Low
+- Affects: `GET /v1/threads/{threadId}/session-history` and Web UI session-sidebar replay for pre-existing provider sessions
+- Symptom:
+  - ngent now surfaces hidden reasoning for hub-created turns by persisting `reasoning_delta` events in normal turn history.
+  - provider-owned historical replay returned by `/session-history` still exposes only visible `user` / `assistant` transcript messages, so switching to an older external session in the Web UI does not reconstruct past hidden reasoning blocks.
+- Workaround:
+  - use regular ngent turn history for turns created through ngent itself; those now preserve reasoning after reload.
+  - treat provider-owned session replay as visible transcript-only until the replay contract is extended.
+- Follow-up plan:
+  - evaluate whether session-transcript schema should grow an optional reasoning field, or whether hidden reasoning should remain excluded from provider-owned replay for privacy/product reasons.
+
+- ID: KI-031
+- Title: Web UI thinking expand state is not persisted across page reload
+- Status: Open
+- Severity: Low
+- Affects: finalized agent messages that include reasoning/thinking content
+- Symptom: users can expand a collapsed `Thinking` panel during the current page session, but a full page reload or fresh history load resets it to the default collapsed presentation.
+- Workaround: expand the needed `Thinking` panel again after reload.
+- Follow-up plan: evaluate persisting per-message UI presentation preferences in browser-local state if users need sticky behavior across reloads.

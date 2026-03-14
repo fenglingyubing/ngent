@@ -122,6 +122,7 @@ const (
 	defaultPermissionTimeout  = 2 * time.Hour
 
 	threadAgentOptionFreshSessionKey = "_ngentFreshSession"
+	eventTypeReasoningDelta          = "reasoning_delta"
 )
 
 const (
@@ -821,6 +822,13 @@ func (s *Server) handleCreateTurnStream(w http.ResponseWriter, r *http.Request, 
 			"entries": payloadEntries,
 		})
 	})
+	turnCtx = agents.WithReasoningHandler(turnCtx, func(reasoningCtx context.Context, delta string) error {
+		_ = reasoningCtx
+		return emit(eventTypeReasoningDelta, map[string]any{
+			"turnId": turnID,
+			"delta":  delta,
+		})
+	})
 	turnCtx = agents.WithSlashCommandsHandler(turnCtx, func(commandsCtx context.Context, commands []agents.SlashCommand) error {
 		_ = commandsCtx
 		if err := s.persistAgentSlashCommands(persistCtx, thread.AgentID, commands); err != nil {
@@ -1026,6 +1034,13 @@ func (s *Server) handleCompactThread(w http.ResponseWriter, r *http.Request, cli
 		return appendOnlyEvent("plan_update", map[string]any{
 			"turnId":  turnID,
 			"entries": payloadEntries,
+		})
+	})
+	turnCtx = agents.WithReasoningHandler(turnCtx, func(reasoningCtx context.Context, delta string) error {
+		_ = reasoningCtx
+		return appendOnlyEvent(eventTypeReasoningDelta, map[string]any{
+			"turnId": turnID,
+			"delta":  delta,
 		})
 	})
 	stopReason, streamErr := streamAgent.Stream(turnCtx, compactPrompt, func(delta string) error {

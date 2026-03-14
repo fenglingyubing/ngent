@@ -11,7 +11,47 @@ This file is the source of milestone progress, validation commands, and next act
 
 - `Post-M8` ACP multi-agent readiness and maintenance.
 
-## Latest Update (2026-03-13)
+## Latest Update (2026-03-14)
+
+- `Post-M8` Web UI thinking tense alignment completed:
+  - kept the live reasoning toggle label as `Thinking` while deltas are still streaming.
+  - switched finalized reasoning labels to `Thought` so completed content reads in the past tense.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `go test ./...`
+
+## Previous Update (2026-03-14)
+
+- `Post-M8` Web UI thinking markdown rendering completed:
+  - switched finalized `Thinking` content from escaped plain text to the same sanitized markdown renderer used by finalized assistant replies.
+  - kept streaming reasoning as plain text so partial markdown does not reflow while deltas are still arriving.
+  - extended markdown typography/code styles to apply inside expanded `Thinking` content as well as normal assistant message bubbles.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `go test ./...`
+
+- `Post-M8` Web UI thinking fold UX completed:
+  - changed the `Thinking` section to a native collapsible panel in the Web UI.
+  - keep in-flight reasoning panels expanded while `reasoning_delta` is still streaming.
+  - once the turn settles into persisted history, render the same `Thinking` content collapsed by default so final replies stay compact.
+  - preserve manual expand/collapse state for finalized messages across in-page list re-renders.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `go test ./...`
+
+- `Post-M8` Web UI thinking/reasoning visibility completed:
+  - added a per-turn reasoning callback bridge in `internal/agents` so ACP `thought_message_chunk` / `agent_thought_chunk` updates no longer stop at provider parsing.
+  - persisted hidden reasoning as first-class `reasoning_delta` turn events in the HTTP/SSE layer, alongside existing `message_delta` and `plan_update` events.
+  - updated the Web UI stream state and history reconstruction so agent messages render a visible `Thinking` section during streaming and after reload/history fetch.
+  - kept assistant answer text as `responseText`; reasoning remains event-backed instead of being merged into the visible answer body.
+  - added regression coverage for:
+    - ACP notification routing of thought chunks into reasoning callbacks.
+    - SSE/history persistence of `reasoning_delta` events.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `go test ./...`
+
+## Previous Update (2026-03-13)
 
 - `Post-M8` shared ACP CLI provider driver completed:
   - extracted `internal/agents/acpcli` as the shared ACP CLI lifecycle driver for `qwen`, `opencode`, `gemini`, and `kimi`, covering shared `initialize/session/new/session/load/session/list/session/prompt/session/set_config_option` flow plus model discovery and transcript replay.
@@ -786,4 +826,3 @@ This file is the source of milestone progress, validation commands, and next act
   - executed validation:
     - pass: `cd internal/webui/web && npm run build`
     - pass: `go test ./...`
-

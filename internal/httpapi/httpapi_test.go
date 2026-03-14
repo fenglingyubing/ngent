@@ -1818,6 +1818,77 @@ func TestTurnsSSEAndHistory(t *testing.T) {
 	}
 }
 
+func TestTurnsSSEIncludesReasoningAndPersistsHistory(t *testing.T) {
+	root := t.TempDir()
+	h := newTestServer(t, testServerOptions{
+		allowedRoots: []string{root},
+		agent:        &reasoningStreamer{},
+	})
+
+	threadID := createThreadForClient(t, h, "client-a", root)
+
+	turnRR := performJSONRequest(t, h, http.MethodPost, "/v1/threads/"+threadID+"/turns", map[string]any{
+		"input":  "show reasoning",
+		"stream": true,
+	}, map[string]string{"X-Client-ID": "client-a"})
+	if turnRR.Code != http.StatusOK {
+		t.Fatalf("turn status code = %d, want %d", turnRR.Code, http.StatusOK)
+	}
+
+	events := parseSSEEvents(t, turnRR.Body.String())
+	reasoningDeltas := make([]string, 0)
+	answerDeltas := make([]string, 0)
+	for _, ev := range events {
+		switch ev.Event {
+		case eventTypeReasoningDelta:
+			reasoningDeltas = append(reasoningDeltas, stringField(ev.Data, "delta"))
+		case "message_delta":
+			answerDeltas = append(answerDeltas, stringField(ev.Data, "delta"))
+		}
+	}
+	if got, want := strings.Join(reasoningDeltas, ""), "step one\nstep two"; got != want {
+		t.Fatalf("reasoning deltas = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(answerDeltas, ""), "final answer"; got != want {
+		t.Fatalf("message deltas = %q, want %q", got, want)
+	}
+
+	historyRR := performJSONRequest(t, h, http.MethodGet, "/v1/threads/"+threadID+"/history?includeEvents=true", nil, map[string]string{"X-Client-ID": "client-a"})
+	if historyRR.Code != http.StatusOK {
+		t.Fatalf("history status code = %d, want %d", historyRR.Code, http.StatusOK)
+	}
+
+	var history struct {
+		Turns []struct {
+			ResponseText string `json:"responseText"`
+			Events       []struct {
+				Type string         `json:"type"`
+				Data map[string]any `json:"data"`
+			} `json:"events"`
+		} `json:"turns"`
+	}
+	if err := json.Unmarshal(historyRR.Body.Bytes(), &history); err != nil {
+		t.Fatalf("unmarshal history: %v", err)
+	}
+	if got, want := len(history.Turns), 1; got != want {
+		t.Fatalf("len(history.turns) = %d, want %d", got, want)
+	}
+	if got, want := history.Turns[0].ResponseText, "final answer"; got != want {
+		t.Fatalf("history responseText = %q, want %q", got, want)
+	}
+
+	persistedReasoning := strings.Builder{}
+	for _, event := range history.Turns[0].Events {
+		if event.Type != eventTypeReasoningDelta {
+			continue
+		}
+		persistedReasoning.WriteString(stringField(event.Data, "delta"))
+	}
+	if got, want := persistedReasoning.String(), "step one\nstep two"; got != want {
+		t.Fatalf("persisted reasoning = %q, want %q", got, want)
+	}
+}
+
 func TestTurnsSSEIncludesPlanUpdatesAndPersistsHistory(t *testing.T) {
 	root := t.TempDir()
 	h := newTestServer(t, testServerOptions{
@@ -2964,6 +3035,26 @@ func (s *planStreamer) Stream(ctx context.Context, input string, onDelta func(de
 		}); err != nil {
 			return agents.StopReasonEndTurn, err
 		}
+	}
+	if err := onDelta("final answer"); err != nil {
+		return agents.StopReasonEndTurn, err
+	}
+	return agents.StopReasonEndTurn, nil
+}
+
+type reasoningStreamer struct{}
+
+func (s *reasoningStreamer) Name() string {
+	return "reasoning-streamer"
+}
+
+func (s *reasoningStreamer) Stream(ctx context.Context, input string, onDelta func(delta string) error) (agents.StopReason, error) {
+	_ = input
+	if err := agents.NotifyReasoningDelta(ctx, "step one\n"); err != nil {
+		return agents.StopReasonEndTurn, err
+	}
+	if err := agents.NotifyReasoningDelta(ctx, "step two"); err != nil {
+		return agents.StopReasonEndTurn, err
 	}
 	if err := onDelta("final answer"); err != nil {
 		return agents.StopReasonEndTurn, err

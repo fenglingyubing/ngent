@@ -5,11 +5,12 @@ This checklist defines executable acceptance checks for requirements 1-16.
 ## Requirement 1: HTTP/JSON plus SSE
 
 - Operation: call JSON endpoint and one SSE turn endpoint.
-- Expected: JSON response is `application/json`; turn endpoint is `text/event-stream`.
+- Expected: JSON response is `application/json`; turn endpoint is `text/event-stream`; turn streams can persist auxiliary event types such as `reasoning_delta` and `plan_update` alongside `message_delta`.
 - Verification command:
   - `curl -sS -i http://127.0.0.1:8686/healthz`
   - `curl -sS -N -H 'X-Client-ID: demo' -H 'Content-Type: application/json' -d '{"input":"hello","stream":true}' http://127.0.0.1:8686/v1/threads/<threadId>/turns`
   - `go test ./internal/httpapi -run TestTurnsSSEAndHistory -count=1`
+  - `go test ./internal/httpapi -run TestTurnsSSEIncludesReasoningAndPersistsHistory -count=1`
 
 ## Requirement 2: Multi-client and multi-thread support
 
@@ -101,11 +102,12 @@ This checklist defines executable acceptance checks for requirements 1-16.
 ## Requirement 13: Embedded Web UI
 
 - Operation: start server; open browser at `http://127.0.0.1:8686/`.
-- Expected: UI loads, threads can be created, turns stream in real time, ACP plan updates render as a live plan card, permissions can be resolved, and history is browsable.
+- Expected: UI loads, threads can be created, turns stream in real time, ACP plan/reasoning updates render as live agent-side sections, live reasoning shows `Thinking`, finalized reasoning shows `Thought`, finalized reasoning uses a lightweight inline toggle, renders markdown, and collapses by default, permissions can be resolved, and history is browsable.
 - Verification command:
   - `go test ./internal/webui -count=1` (checks `GET /` returns 200 with `text/html` content-type and SPA fallback)
+  - `go test ./internal/httpapi -run TestTurnsSSEIncludesReasoningAndPersistsHistory -count=1`
   - `cd internal/webui/web && npm run build`
-  - manual: `make run` → open `http://127.0.0.1:8686/` or scan the startup QR code from another device
+  - manual: `make run` → open `http://127.0.0.1:8686/` or scan the startup QR code from another device, confirm live `Thinking` stays expanded while streaming, finalized reasoning label changes to `Thought`, markdown inside expanded `Thought` renders correctly, and the section collapses after the turn completes
 
 ## Global Gate
 

@@ -17,7 +17,7 @@ Modules:
 
 - `internal/httpapi`: routing, request validation, response/error encoding.
 - `internal/runtime`: thread controller, turn state machine, cancellation coordination.
-- `internal/agents`: agent providers (fake + ACP-compatible implementations), plus context-bound permission callback bridge.
+- `internal/agents`: agent providers (fake + ACP-compatible implementations), plus context-bound permission/reasoning/session/plan callback bridges.
   - per-turn provider resolution selects implementation by thread metadata (agent id + cwd).
   - `internal/agents/acpcli` is the shared ACP CLI driver used by `qwen`, `opencode`, `gemini`, and `kimi`; provider-specific hooks own command startup, request parameter shaping, permission mapping, and cancel quirks.
 - `internal/context`: prompt injection strategy assembled in HTTP/runtime path from summary + recent turns + current input.
@@ -64,6 +64,13 @@ Flow:
    - client submits `POST /v1/permissions/{permissionId}` with outcome.
 4. if decision is missing/late/invalid, default is deny (fail-closed).
 
+Turn-side auxiliary callbacks:
+
+- hidden reasoning/thinking deltas are forwarded separately from visible assistant text.
+- reasoning is streamed/persisted as `reasoning_delta` events instead of being merged into `responseText`.
+- the Web UI renders reasoning in a lightweight collapsible reasoning toggle: labeled `Thinking` during live streaming, relabeled `Thought` once finalized history is reconstructed, collapsed by default after completion, with indented left-border content when opened and sanitized markdown rendering for finalized reasoning text.
+- plan replacements continue to flow as `plan_update`.
+
 ## 6. Persistence Model
 
 SQLite stores:
@@ -76,6 +83,7 @@ SQLite stores:
 Properties:
 
 - all outbound stream events are persisted before or atomically with emission strategy.
+- streamed auxiliary events such as `reasoning_delta`, `plan_update`, and `permission_required` share the same append-only event log as `message_delta`.
 - each event has monotonic sequence per thread or turn.
 - thread deletion removes dependent rows in order (`events` -> `turns` -> `threads`) in one transaction.
 - restart can rebuild state from durable turn status plus event log.
@@ -99,6 +107,7 @@ On restart:
 - thread compact (`POST /v1/threads/{threadId}/compact`)
 - SSE stream for real-time events
 - permission decision endpoint
+- turn history with optional persisted event replay (`message_delta`, `reasoning_delta`, `plan_update`, terminal/error events)
 
 See `docs/API.md` for endpoint and schema contracts.
 
