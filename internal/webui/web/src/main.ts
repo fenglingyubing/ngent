@@ -3389,6 +3389,14 @@ async function init(): Promise<void> {
       lastRenderChatScopeKey = chatScopeKey
       updateChatArea()
     } else {
+      if (chatScopeChanged && hasMountedActiveStream(chatScopeKey)) {
+        // A fresh session can become bound to its stable session id right before
+        // the turn completes. Keep tracking the new scope even though we reuse
+        // the existing streaming DOM, otherwise completion will look like a
+        // later scope switch and trigger an unnecessary history reload that can
+        // overwrite the finalized reasoning.
+        lastRenderChatScopeKey = chatScopeKey
+      }
       // activeStreamMsgId is non-null while the streaming bubble is in the DOM.
       // Re-rendering the message list would destroy that bubble, so we skip it.
       if (!activeStreamMsgId) updateMessageList()
