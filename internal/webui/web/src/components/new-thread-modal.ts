@@ -72,12 +72,12 @@ function renderModal(s: ModalState, agents: AgentInfo[]): string {
   const canSubmit = !!s.selectedAgent && isAbsolutePath(s.cwd) && !s.submitting
 
   return `
-    <div class="modal-overlay" id="new-thread-overlay" role="dialog" aria-modal="true" aria-label="New agent">
+    <div class="modal-overlay" id="new-thread-overlay" role="dialog" aria-modal="true" aria-label="新建 Agent">
       <div class="modal" id="new-thread-modal">
 
         <div class="modal-header">
-          <h2 class="modal-title">New Agent</h2>
-          <button class="btn btn-icon" id="new-thread-close" aria-label="Close">${iconClose}</button>
+          <h2 class="modal-title">新建 Agent</h2>
+          <button class="btn btn-icon" id="new-thread-close" aria-label="关闭">${iconClose}</button>
         </div>
 
         <div class="modal-body">
@@ -89,13 +89,13 @@ function renderModal(s: ModalState, agents: AgentInfo[]): string {
             <div class="agent-grid" id="agent-grid">
               ${agents.length
                 ? agents.map(a => renderAgentCard(a, a.id === s.selectedAgent)).join('')
-                : '<p class="form-hint">Loading agents…</p>'}
+                : '<p class="form-hint">正在加载 Agent…</p>'}
             </div>
           </div>
 
           <div class="form-group">
             <label class="form-label" for="cwd-input">
-              Working Directory <span class="form-required">*</span>
+              工作目录 <span class="form-required">*</span>
             </label>
             <input
               id="cwd-input"
@@ -107,17 +107,17 @@ function renderModal(s: ModalState, agents: AgentInfo[]): string {
               spellcheck="false"
             />
             ${cwdInvalid
-              ? `<p class="form-hint form-hint--error" id="cwd-hint">Path must be absolute (start with /)</p>`
-              : `<p class="form-hint" id="cwd-hint">Absolute path to the project directory.</p>`}
+              ? `<p class="form-hint form-hint--error" id="cwd-hint">路径必须是绝对路径（以 / 开头）</p>`
+              : `<p class="form-hint" id="cwd-hint">项目目录的绝对路径。</p>`}
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="title-input">Title <span class="form-optional">(optional)</span></label>
+            <label class="form-label" for="title-input">标题 <span class="form-optional">（可选）</span></label>
             <input
               id="title-input"
               class="settings-input"
               type="text"
-              placeholder="e.g. Refactor payment module"
+              placeholder="例如：重构支付模块"
               value="${escHtml(s.title)}"
               maxlength="120"
             />
@@ -126,12 +126,12 @@ function renderModal(s: ModalState, agents: AgentInfo[]): string {
           <div class="collapsible ${s.advancedOpen ? 'collapsible--open' : ''}">
             <button class="collapsible-toggle" id="advanced-toggle" type="button">
               <span class="collapsible-chevron">${iconChevron}</span>
-              Advanced options
+              高级选项
             </button>
             <div class="collapsible-body">
               <div class="form-group">
                 <label class="form-label" for="agent-options-input">
-                  Agent Options <span class="form-optional">(JSON)</span>
+                  Agent 选项 <span class="form-optional">(JSON)</span>
                 </label>
                 <textarea
                   id="agent-options-input"
@@ -147,14 +147,14 @@ function renderModal(s: ModalState, agents: AgentInfo[]): string {
         </div>
 
         <div class="modal-footer">
-          <button class="btn btn-ghost" id="new-thread-cancel" type="button">Cancel</button>
+          <button class="btn btn-ghost" id="new-thread-cancel" type="button">取消</button>
           <button
             class="btn btn-primary"
             id="new-thread-submit"
             type="button"
             ${canSubmit ? '' : 'disabled'}
           >
-            ${s.submitting ? '<span class="btn-spinner"></span> Creating…' : 'Create Agent'}
+            ${s.submitting ? '<span class="btn-spinner"></span> 创建中…' : '创建 Agent'}
           </button>
         </div>
 
@@ -279,8 +279,8 @@ function refreshCwdHint(): void {
   input.classList.toggle('settings-input--error', invalid)
   hint.className = `form-hint${invalid ? ' form-hint--error' : ''}`
   hint.textContent = invalid
-    ? 'Path must be absolute (start with /)'
-    : 'Absolute path to the project directory.'
+    ? '路径必须是绝对路径（以 / 开头）'
+    : '项目目录的绝对路径。'
 }
 
 function refreshSubmitButton(): void {
@@ -321,7 +321,7 @@ async function submit(): Promise<void> {
     try {
       agentOptions = JSON.parse(modalState.agentOptionsRaw) as Record<string, unknown>
     } catch {
-      modalState = { ...modalState, error: 'Agent options must be valid JSON.' }
+      modalState = { ...modalState, error: 'Agent 选项必须是有效的 JSON。' }
       rerender()
       return
     }

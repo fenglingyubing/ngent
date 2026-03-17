@@ -26,12 +26,12 @@ function renderPanel(): string {
     >${label}</button>`
 
   return `
-    <div class="settings-overlay" id="settings-overlay" role="dialog" aria-modal="true" aria-label="Settings">
+    <div class="settings-overlay" id="settings-overlay" role="dialog" aria-modal="true" aria-label="设置">
       <div class="settings-panel" id="settings-panel">
 
         <div class="settings-header">
-          <h2 class="settings-title">Settings</h2>
-          <button class="btn btn-icon" id="settings-close-btn" aria-label="Close settings">
+          <h2 class="settings-title">设置</h2>
+          <button class="btn btn-icon" id="settings-close-btn" aria-label="关闭设置">
             ${iconClose}
           </button>
         </div>
@@ -39,33 +39,33 @@ function renderPanel(): string {
         <div class="settings-body">
 
           <section class="settings-section">
-            <h3 class="settings-section-title">Identity</h3>
+            <h3 class="settings-section-title">身份</h3>
             <label class="settings-label">Client ID</label>
             <p class="settings-description">
-              Automatically assigned. All agents and turns are scoped to this ID.
+              自动分配。当前浏览器中的所有 Agent 和轮次都以此 ID 为作用域。
             </p>
             <div class="settings-id-row">
               <code class="settings-client-id" id="client-id-display">${escHtml(clientId)}</code>
-              <button class="btn btn-icon settings-copy-btn" id="copy-client-id-btn" title="Copy client ID">
+              <button class="btn btn-icon settings-copy-btn" id="copy-client-id-btn" title="复制 Client ID">
                 ${iconCopy}
               </button>
             </div>
             <button class="btn btn-ghost btn-sm settings-reset-btn" id="reset-client-id-btn">
-              Reset Client ID
+              重置 Client ID
             </button>
           </section>
 
           <section class="settings-section">
-            <h3 class="settings-section-title">Security</h3>
+            <h3 class="settings-section-title">安全</h3>
             <label class="settings-label" for="auth-token-input">Bearer Token</label>
             <p class="settings-description">
-              Optional. Set if the server was started with <code>--auth-token</code>.
+              可选。如果服务端启动时使用了 <code>--auth-token</code>，请在这里填写。
             </p>
             <input
               id="auth-token-input"
               class="settings-input"
               type="password"
-              placeholder="Leave empty if not required"
+              placeholder="如果不需要可留空"
               value="${escHtml(authToken)}"
               autocomplete="off"
               spellcheck="false"
@@ -73,20 +73,20 @@ function renderPanel(): string {
           </section>
 
           <section class="settings-section">
-            <h3 class="settings-section-title">Appearance</h3>
-            <label class="settings-label">Theme</label>
+            <h3 class="settings-section-title">外观</h3>
+            <label class="settings-label">主题</label>
             <div class="theme-btn-group">
-              ${themeBtn('light', 'Light')}
-              ${themeBtn('system', 'System')}
-              ${themeBtn('dark', 'Dark')}
+              ${themeBtn('light', '浅色')}
+              ${themeBtn('system', '跟随系统')}
+              ${themeBtn('dark', '深色')}
             </div>
           </section>
 
           <section class="settings-section">
-            <h3 class="settings-section-title">Connection</h3>
-            <label class="settings-label" for="server-url-input">Server URL</label>
+            <h3 class="settings-section-title">连接</h3>
+            <label class="settings-label" for="server-url-input">服务器 URL</label>
             <p class="settings-description">
-              Base URL of the Ngent Server API. Change if using a reverse proxy.
+              Ngent Server API 的基础地址。如果使用了反向代理，请在这里修改。
             </p>
             <input
               id="server-url-input"
@@ -163,7 +163,7 @@ function bindEvents(): void {
 
   // Reset client ID (with confirmation)
   container.querySelector('#reset-client-id-btn')?.addEventListener('click', () => {
-    if (!confirm('Reset your Client ID? You will lose access to existing agents in this browser.')) return
+    if (!confirm('确定要重置 Client ID 吗？重置后你将无法在当前浏览器中访问已有 Agent。')) return
     store.resetClientId()
     const display = container?.querySelector<HTMLElement>('#client-id-display')
     if (display) display.textContent = store.get().clientId

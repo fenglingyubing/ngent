@@ -51,17 +51,17 @@ marked.use({
     code(code: string, language: string | undefined): string {
       const id          = nextId()
       const highlighted = highlightCode(code, language)
-      const langLabel   = language ? escHtml(language) : 'text'
+      const langLabel   = language ? escHtml(language) : '文本'
       const lineCount   = code.split('\n').length
       const needsFold   = lineCount > FOLD_LINES
       const expandBtn   = needsFold
-        ? `\n  <button class="code-expand-btn" data-target="${id}" type="button">Show all ${lineCount} lines ↓</button>`
+        ? `\n  <button class="code-expand-btn" data-target="${id}" type="button">展开全部 ${lineCount} 行 ↓</button>`
         : ''
 
       return `<div class="code-block">
   <div class="code-block-header">
     <span class="code-lang">${langLabel}</span>
-    <button class="code-copy-btn" data-code="${escHtml(code)}" type="button">Copy</button>
+    <button class="code-copy-btn" data-code="${escHtml(code)}" type="button">复制</button>
   </div>
   <pre class="code-pre${needsFold ? ' code-pre--collapsed' : ''}" id="${id}"><code class="hljs">${highlighted}</code></pre>${expandBtn}
 </div>`
@@ -84,10 +84,10 @@ export function bindMarkdownControls(container: HTMLElement): void {
       btn.addEventListener('click', () => {
         void copyText(btn.dataset.code ?? '').then(copied => {
           if (!copied) return
-          btn.textContent = 'Copied ✓'
+          btn.textContent = '已复制 ✓'
           btn.classList.add('code-copy-btn--copied')
           setTimeout(() => {
-            btn.textContent = 'Copy'
+            btn.textContent = '复制'
             btn.classList.remove('code-copy-btn--copied')
           }, 2_000)
         })

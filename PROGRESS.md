@@ -11,7 +11,17 @@ This file is the source of milestone progress, validation commands, and next act
 
 - `Post-M8` ACP multi-agent readiness and maintenance.
 
-## Latest Update (2026-03-16)
+## Latest Update (2026-03-17)
+
+- `Post-M8` Web UI Chinese localization completed:
+  - translated the core embedded Web UI surface into Chinese across the sidebar, session panel, composer, settings drawer, new-agent modal, permission cards, markdown copy/expand controls, and chat/system status text.
+  - localized reasoning labels to `思考中` during streaming and `思考过程` after completion, and aligned acceptance/spec/ADR docs with the new UI wording.
+  - validation:
+    - pass: `cd internal/webui/web && npm ci && npm run build`
+    - pass: Playwright smoke via `with_server.py` confirmed localized shell labels (`设置` / `搜索 Agent…` / `会话` / `新建 Agent`)
+    - blocked in current environment: `go test ./...` (`go` not installed)
+
+## Previous Update (2026-03-16)
 
 - `Post-M8` ACP tool-call streaming completed:
   - extended shared ACP `session/update` parsing to preserve structured `tool_call` and `tool_call_update` payloads, including `toolCallId`, status/title/kind, content blocks, locations, and raw input/output payloads.

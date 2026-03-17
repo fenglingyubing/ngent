@@ -683,14 +683,14 @@ function renderThreadActionPopover(t: Thread): string {
             data-thread-id="${escHtml(t.threadId)}"
             type="text"
             value="${escHtml(renamingThreadDraft)}"
-            placeholder="Agent name"
+            placeholder="Agent 名称"
             maxlength="120"
-            aria-label="Rename agent"
+            aria-label="重命名 Agent"
           />
           <div class="thread-rename-actions">
-            <button class="btn btn-primary btn-sm" type="submit">Save</button>
+            <button class="btn btn-primary btn-sm" type="submit">保存</button>
             <button class="btn btn-ghost btn-sm thread-rename-cancel-btn" type="button" data-thread-id="${escHtml(t.threadId)}">
-              Cancel
+              取消
             </button>
           </div>
         </form>
@@ -698,9 +698,9 @@ function renderThreadActionPopover(t: Thread): string {
   }
 
   return `
-    <div class="thread-action-popover thread-action-menu" data-thread-id="${escHtml(t.threadId)}" role="menu" aria-label="Agent actions">
+    <div class="thread-action-popover thread-action-menu" data-thread-id="${escHtml(t.threadId)}" role="menu" aria-label="Agent 操作">
       <button class="thread-action-menu-item" type="button" data-thread-id="${escHtml(t.threadId)}" data-action="rename" role="menuitem">
-        Rename
+        重命名
       </button>
       <button
         class="thread-action-menu-item thread-action-menu-item--danger"
@@ -709,7 +709,7 @@ function renderThreadActionPopover(t: Thread): string {
         data-action="delete"
         role="menuitem"
       >
-        Delete
+        删除
       </button>
     </div>`
 }
@@ -1139,7 +1139,7 @@ async function loadThreadSessions(threadId: string, append = false): Promise<voi
     })
   } catch (err) {
     if (sessionPanelRequestSeqByThread.get(threadId) !== requestSeq) return
-    const message = err instanceof Error ? err.message : 'Failed to load sessions.'
+    const message = err instanceof Error ? err.message : '加载会话失败。'
     setSessionPanelState(threadId, {
       ...sessionPanelState(threadId),
       loading: false,
@@ -1184,7 +1184,7 @@ async function switchThreadSession(thread: Thread, nextSessionID: string): Promi
       messages: nextMessages,
     })
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to update session.'
+    const message = err instanceof Error ? err.message : '更新会话失败。'
     window.alert(message)
   } finally {
     sessionSwitchingThreads.delete(thread.threadId)
@@ -1217,9 +1217,9 @@ function renderSessionPanel(): string {
   if (!thread) {
     return `
       <div class="session-panel-header">
-        <h3 class="session-panel-title">Sessions</h3>
+        <h3 class="session-panel-title">会话</h3>
       </div>
-      <div class="session-panel-empty">Select an agent to browse ACP sessions.</div>`
+      <div class="session-panel-empty">请选择一个 Agent 以浏览 ACP 会话。</div>`
   }
 
   const state = sessionPanelState(thread.threadId)
@@ -1241,11 +1241,11 @@ function renderSessionPanel(): string {
 
   let bodyHTML = ''
   if (state.loading && !sessions.length) {
-    bodyHTML = `<div class="session-panel-empty">Loading sessions…</div>`
+    bodyHTML = `<div class="session-panel-empty">正在加载会话…</div>`
   } else if (state.error && !sessions.length) {
     bodyHTML = `<div class="session-panel-empty session-panel-empty--error">${escHtml(state.error)}</div>`
   } else if (state.supported === false) {
-    bodyHTML = `<div class="session-panel-empty">This agent does not expose ACP session history.</div>`
+    bodyHTML = `<div class="session-panel-empty">该 Agent 不支持 ACP 会话历史。</div>`
   } else {
     const itemsHTML = sessions.length
       ? sessions.map(item => renderSessionItem(
@@ -1253,10 +1253,10 @@ function renderSessionPanel(): string {
           item.sessionId === selectedSessionID,
           loadingSessionIDs.has(item.sessionId),
         )).join('')
-      : `<div class="session-panel-empty">No previous sessions for this working directory.</div>`
+      : `<div class="session-panel-empty">当前工作目录下没有历史会话。</div>`
     const showMoreHTML = state.nextCursor
       ? `<button class="btn btn-ghost session-show-more-btn" type="button" ${state.loadingMore || disabled ? 'disabled' : ''}>
-          ${state.loadingMore ? 'Loading…' : 'Show more'}
+          ${state.loadingMore ? '正在加载…' : '显示更多'}
         </button>`
       : ''
     bodyHTML = `
@@ -1270,22 +1270,22 @@ function renderSessionPanel(): string {
   return `
     <div class="session-panel-header">
       <div>
-        <h3 class="session-panel-title">Sessions</h3>
+        <h3 class="session-panel-title">会话</h3>
       </div>
       <div class="session-panel-actions">
         <button
           class="btn btn-icon session-refresh-btn ${state.loading ? 'session-refresh-btn--loading' : ''}"
           type="button"
-          title="${state.loading ? 'Refreshing sessions' : 'Refresh sessions'}"
-          aria-label="${state.loading ? 'Refreshing sessions' : 'Refresh sessions'}"
+          title="${state.loading ? '正在刷新会话' : '刷新会话'}"
+          aria-label="${state.loading ? '正在刷新会话' : '刷新会话'}"
           ${refreshDisabled ? 'disabled' : ''}>
           ${iconRefresh}
         </button>
         <button
           class="btn btn-icon session-new-btn"
           type="button"
-          title="New session"
-          aria-label="New session"
+          title="新建会话"
+          aria-label="新建会话"
           ${disabled ? 'disabled' : ''}>
           ${iconPlus}
         </button>
@@ -1619,13 +1619,13 @@ function renderComposerConfigSwitch(
 }
 
 const modelPickerLabels: ConfigPickerLabels = {
-  loadingLabel: 'Loading models…',
-  emptyLabel: 'No models available',
+  loadingLabel: '正在加载模型…',
+  emptyLabel: '暂无可用模型',
 }
 
 const reasoningPickerLabels: ConfigPickerLabels = {
-  loadingLabel: 'Loading reasoning…',
-  emptyLabel: 'No reasoning',
+  loadingLabel: '正在加载思考模式…',
+  emptyLabel: '无思考选项',
 }
 
 function renderAgentAvatar(agentId: string, variant: 'thread' | 'message'): string {
@@ -1660,8 +1660,8 @@ function renderThreadStatusIndicator(status: ThreadActivityIndicator): string {
       <span
         class="thread-status-indicator thread-status-indicator--loading"
         role="status"
-        aria-label="Agent is working"
-        title="Agent is working"
+        aria-label="Agent 正在运行"
+        title="Agent 正在运行"
       >
         <span class="thread-status-spinner" aria-hidden="true"></span>
       </span>`
@@ -1671,8 +1671,8 @@ function renderThreadStatusIndicator(status: ThreadActivityIndicator): string {
       <span
         class="thread-status-indicator thread-status-indicator--done"
         role="img"
-        aria-label="Latest turn finished"
-        title="Latest turn finished"
+        aria-label="最近一轮已完成"
+        title="最近一轮已完成"
       >
         ${iconCheck}
       </span>`
@@ -1686,8 +1686,8 @@ function renderSessionStatusIndicator(loading: boolean): string {
       <span
         class="thread-status-indicator session-status-indicator thread-status-indicator--loading"
         role="status"
-        aria-label="Session is working"
-        title="Session is working"
+        aria-label="会话正在运行"
+        title="会话正在运行"
       >
         <span class="thread-status-spinner" aria-hidden="true"></span>
       </span>`
@@ -1732,7 +1732,7 @@ function renderThreadItem(
         <button class="btn btn-ghost btn-sm thread-item-menu-trigger" type="button"
                 data-thread-id="${escHtml(t.threadId)}"
                 aria-expanded="${isMenuOpen ? 'true' : 'false'}"
-                aria-label="Agent actions">
+                aria-label="Agent 操作">
           ...
         </button>
       </div>
@@ -1754,7 +1754,7 @@ function updateThreadList(): void {
   if (!filtered.length) {
     el.innerHTML = `
       <div class="thread-list-empty">
-        ${q ? `No agents matching "<strong>${escHtml(q)}</strong>"` : 'No agents yet.<br>Click <strong>+</strong> to start one.'}
+        ${q ? `没有匹配 "<strong>${escHtml(q)}</strong>" 的 Agent` : '还没有 Agent。<br>点击 <strong>+</strong> 创建。'}
       </div>`
     renderThreadActionLayer()
     return
@@ -1814,8 +1814,8 @@ async function handleRenameThread(threadId: string, nextTitle: string): Promise<
   try {
     updatedThread = await api.updateThread(threadId, { title })
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    window.alert(`Failed to rename agent: ${message}`)
+    const message = err instanceof Error ? err.message : '未知错误'
+    window.alert(`重命名 Agent 失败：${message}`)
     return
   }
 
@@ -1835,13 +1835,13 @@ async function handleDeleteThread(threadId: string): Promise<void> {
   if (!thread) return
 
   const label = threadTitle(thread)
-  if (!window.confirm(`Delete agent "${label}"? This will permanently remove its history.`)) return
+  if (!window.confirm(`删除 Agent “${label}”？这将永久移除其历史记录。`)) return
 
   try {
     await api.deleteThread(threadId)
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    window.alert(`Failed to delete agent: ${message}`)
+    const message = err instanceof Error ? err.message : '未知错误'
+    window.alert(`删除 Agent 失败：${message}`)
     return
   }
 
@@ -2086,7 +2086,7 @@ async function loadHistory(threadId: string): Promise<void> {
     if (!loadedHistoryScopeKeys.has(requestedScopeKey)) {
       const listEl = document.getElementById('message-list')
       if (listEl) {
-        listEl.innerHTML = `<div class="thread-list-empty" style="color:var(--error)">Failed to load history.</div>`
+        listEl.innerHTML = `<div class="thread-list-empty" style="color:var(--error)">加载历史记录失败。</div>`
       }
     }
   }
@@ -2106,7 +2106,7 @@ function planStatusClassName(status: string | undefined): string {
 
 function renderPlanInnerHTML(entries: PlanEntry[]): string {
   return `
-    <div class="message-plan__header">Plan</div>
+    <div class="message-plan__header">计划</div>
     <ol class="message-plan__list">
       ${entries.map(entry => {
         const status = formatPlanLabel(entry.status)
@@ -2145,7 +2145,7 @@ function renderToolCallPreHTML(text: string, collapsible = false): string {
   const preID = nextToolCallPreID()
   const collapsedClass = collapsible ? ' message-tool-call__pre--collapsed' : ''
   const expandBtn = collapsible
-    ? `<button class="message-tool-call__expand-btn" data-target="${preID}" type="button" hidden>Show all</button>`
+    ? `<button class="message-tool-call__expand-btn" data-target="${preID}" type="button" hidden>展开全部</button>`
     : ''
   return `
     <div class="message-tool-call__pre-wrap">
@@ -2217,8 +2217,8 @@ function renderToolCallContentHTML(item: unknown): string {
     return `
       <div class="message-tool-call__content-item">
         ${heading ? `<div class="message-tool-call__content-label">${escHtml(heading)}</div>` : ''}
-        ${oldText ? `<div class="message-tool-call__diff-block"><div class="message-tool-call__diff-label">Before</div>${renderToolCallPreHTML(oldText, true)}</div>` : ''}
-        ${newText ? `<div class="message-tool-call__diff-block"><div class="message-tool-call__diff-label">After</div>${renderToolCallPreHTML(newText, true)}</div>` : ''}
+        ${oldText ? `<div class="message-tool-call__diff-block"><div class="message-tool-call__diff-label">变更前</div>${renderToolCallPreHTML(oldText, true)}</div>` : ''}
+        ${newText ? `<div class="message-tool-call__diff-block"><div class="message-tool-call__diff-label">变更后</div>${renderToolCallPreHTML(newText, true)}</div>` : ''}
       </div>`
   }
 
@@ -2243,7 +2243,7 @@ function renderToolCallCardHTML(toolCall: ToolCall): string {
   const locationsHTML = toolCall.locations?.length
     ? `
       <div class="message-tool-call__section">
-        <div class="message-tool-call__section-title">Locations</div>
+        <div class="message-tool-call__section-title">位置</div>
         <ul class="message-tool-call__location-list">
           ${toolCall.locations.map(renderToolCallLocationHTML).join('')}
         </ul>
@@ -2253,14 +2253,14 @@ function renderToolCallCardHTML(toolCall: ToolCall): string {
     ? ''
     : `
       <div class="message-tool-call__section">
-        <div class="message-tool-call__section-title">Input</div>
+        <div class="message-tool-call__section-title">输入</div>
         ${renderToolCallJSON(toolCall.rawInput, true)}
       </div>`
   const rawOutputHTML = toolCall.rawOutput === undefined
     ? ''
     : `
       <div class="message-tool-call__section">
-        <div class="message-tool-call__section-title">Output</div>
+        <div class="message-tool-call__section-title">输出</div>
         ${renderToolCallJSON(toolCall.rawOutput, true)}
       </div>`
 
@@ -2270,7 +2270,7 @@ function renderToolCallCardHTML(toolCall: ToolCall): string {
         <div class="message-tool-call__title">${escHtml(title)}</div>
         ${meta ? `<div class="message-tool-call__meta">${meta}</div>` : ''}
       </div>
-      ${contentHTML ? `<div class="message-tool-call__section"><div class="message-tool-call__section-title">Content</div>${contentHTML}</div>` : ''}
+      ${contentHTML ? `<div class="message-tool-call__section"><div class="message-tool-call__section-title">内容</div>${contentHTML}</div>` : ''}
       ${locationsHTML}
       ${rawInputHTML}
       ${rawOutputHTML}
@@ -2282,7 +2282,7 @@ function renderToolCallSectionHTML(toolCalls: ToolCall[] | undefined, extraClass
   if (!normalized?.length) return ''
   return `
     <div class="message-tool-calls${extraClass}">
-      <div class="message-tool-calls__header">Tool Calls</div>
+      <div class="message-tool-calls__header">工具调用</div>
       <div class="message-tool-calls__list">
         ${normalized.map(renderToolCallCardHTML).join('')}
       </div>
@@ -2303,7 +2303,7 @@ function renderReasoningSectionHTML(
   extraClass = '',
   expanded = false,
   renderMarkdownContent = false,
-  label = 'Thinking',
+  label = '思考中',
 ): string {
   if (!hasReasoningText(reasoning)) return ''
   const state = reasoningPanelState(expanded)
@@ -2344,8 +2344,8 @@ function renderMessage(msg: Message, agentAvatar: string): string {
     <button
       class="msg-copy-btn"
       data-copy-text="${escHtml(encodeURIComponent(text))}"
-      title="Copy message"
-      aria-label="Copy message"
+      title="复制消息"
+      aria-label="复制消息"
       type="button"
     >⎘</button>`
 
@@ -2368,7 +2368,7 @@ function renderMessage(msg: Message, agentAvatar: string): string {
   const isDone      = msg.status === 'done'
 
   const bodyText = isError
-    ? (msg.errorCode ? `[${msg.errorCode}] ` : '') + (msg.errorMessage ?? 'Unknown error')
+    ? (msg.errorCode ? `[${msg.errorCode}] ` : '') + (msg.errorMessage ?? '未知错误')
     : (msg.content || '…')
   const planHTML = renderPlanSectionHTML(msg.planEntries)
   const toolCallsHTML = renderToolCallSectionHTML(msg.toolCalls)
@@ -2378,7 +2378,7 @@ function renderMessage(msg: Message, agentAvatar: string): string {
     '',
     expandedReasoningMessageIds.has(msg.id),
     true,
-    'Thought',
+    '思考过程',
   )
   const hasSupplementarySections = !!msg.planEntries?.length || !!msg.toolCalls?.length || hasReasoningText(msg.reasoning)
   const shouldRenderBubble = !(isDone && !msg.content && hasSupplementarySections)
@@ -2397,7 +2397,7 @@ function renderMessage(msg: Message, agentAvatar: string): string {
     bubbleContent = escHtml(bodyText)
   }
 
-  const stopTag  = isCancelled ? `<span class="message-stop-reason">Cancelled</span>` : ''
+  const stopTag  = isCancelled ? `<span class="message-stop-reason">已取消</span>` : ''
   const copyBtn  = isDone && msg.content ? renderMessageCopyBtn(bodyText) : ''
   const bubbleHTML = shouldRenderBubble
     ? `<div class="message-bubble${bubbleExtra}">${bubbleContent}</div>`
@@ -2539,8 +2539,8 @@ function updateMessageList(): void {
     listEl.innerHTML = `
       <div class="empty-state">
         <div class="empty-state-icon" style="font-size:28px">💬</div>
-        <h3 class="empty-state-title" style="font-size:var(--font-size-lg)">Start the conversation</h3>
-        <p class="empty-state-desc">Send your first message to begin working with ${escHtml(thread?.agent ?? 'the agent')}.</p>
+        <h3 class="empty-state-title" style="font-size:var(--font-size-lg)">开始对话</h3>
+        <p class="empty-state-desc">发送第一条消息，开始与 ${escHtml(thread?.agent ?? '该 Agent')} 协作。</p>
       </div>`
     return
   }
@@ -2586,7 +2586,7 @@ function updateInputState(): void {
   if (cancelBtn) {
     cancelBtn.style.display = isStreaming ? '' : 'none'
     cancelBtn.disabled      = isCancelling
-    cancelBtn.textContent   = isCancelling ? 'Cancelling…' : 'Cancel'
+    cancelBtn.textContent   = isCancelling ? '正在取消…' : '取消'
   }
   updateSlashCommandMenu()
 }
@@ -2685,14 +2685,14 @@ function updateSlashCommandMenu(): void {
   if (!loading && !commands.length) {
     slashCommandSelectedIndex = 0
     menuEl.hidden = false
-    menuEl.innerHTML = `<div class="slash-command-empty">No matching slash commands.</div>`
+    menuEl.innerHTML = `<div class="slash-command-empty">没有匹配的斜杠命令。</div>`
     return
   }
 
   slashCommandSelectedIndex = Math.max(0, Math.min(slashCommandSelectedIndex, commands.length - 1))
   menuEl.hidden = false
   menuEl.innerHTML = `
-    <div class="slash-command-header">Slash Commands</div>
+    <div class="slash-command-header">斜杠命令</div>
     <div class="slash-command-list">
       ${commands.map((command, index) => renderSlashCommandMenuItem(command, index === slashCommandSelectedIndex)).join('')}
     </div>`
@@ -2725,12 +2725,12 @@ function renderChatEmpty(): string {
   return `
     <div class="empty-state">
       <div class="empty-state-icon">◈</div>
-      <h3 class="empty-state-title">No agent selected</h3>
+      <h3 class="empty-state-title">未选择 Agent</h3>
       <p class="empty-state-desc">
-        Select an agent from the sidebar, or create a new one to start chatting.
+        从侧边栏选择一个 Agent，或新建一个开始对话。
       </p>
       <button class="btn btn-primary" id="new-thread-empty-btn">
-        ${iconPlus} New Agent
+        ${iconPlus} 新建 Agent
       </button>
     </div>`
 }
@@ -2764,17 +2764,17 @@ function renderSessionInfoPopover(thread: Thread): string {
         class="btn btn-icon session-info-trigger"
         id="session-info-trigger"
         type="button"
-        aria-label="Session info"
+        aria-label="会话信息"
         aria-expanded="false"
         aria-controls="session-info-panel"
-        title="Session info"
+        title="会话信息"
       >
         ${iconInfo}
       </button>
-      <div class="session-info-popover" id="session-info-panel" role="dialog" aria-label="Session Info" hidden>
-        <div class="session-info-heading">Session Info</div>
-        ${renderSessionInfoField('Session ID', sessionID, 'Copy session ID')}
-        ${renderSessionInfoField('Working Directory', thread.cwd, 'Copy working directory')}
+      <div class="session-info-popover" id="session-info-panel" role="dialog" aria-label="会话信息" hidden>
+        <div class="session-info-heading">会话信息</div>
+        ${renderSessionInfoField('会话 ID', sessionID, '复制会话 ID')}
+        ${renderSessionInfoField('工作目录', thread.cwd, '复制工作目录')}
       </div>
     </div>`
 }
@@ -2803,7 +2803,7 @@ function renderSlashCommandMenuItem(command: SlashCommand, active: boolean): str
 
 function renderChatThread(t: Thread): string {
   const titleLabel   = threadTitle(t)
-  const createdLabel = t.createdAt ? `Created ${formatTimestamp(t.createdAt)}` : ''
+  const createdLabel = t.createdAt ? `创建于 ${formatTimestamp(t.createdAt)}` : ''
   const selectedModelID = fallbackThreadModelID(t)
   const catalogKey = normalizeAgentConfigCatalogKey(t.agent ?? '', selectedModelID)
   const hasConfigCache = threadConfigCache.has(t.threadId) || hasAgentConfigCatalog(t.agent ?? '', selectedModelID)
@@ -2829,7 +2829,7 @@ function renderChatThread(t: Thread): string {
   return `
     <div class="chat-header">
       <div class="chat-header-left">
-        <button class="btn btn-icon mobile-menu-btn" aria-label="Open menu">${iconMenu}</button>
+        <button class="btn btn-icon mobile-menu-btn" aria-label="打开菜单">${iconMenu}</button>
         <div class="chat-header-main">
           <div class="chat-header-title-row">
             <h2 class="chat-title" title="${escHtml(titleLabel)}">${escHtml(titleLabel)}</h2>
@@ -2838,7 +2838,7 @@ function renderChatThread(t: Thread): string {
         </div>
       </div>
       <div class="chat-header-right">
-        <button class="btn btn-sm btn-danger" id="cancel-btn" style="display:none" aria-label="Cancel turn">Cancel</button>
+        <button class="btn btn-sm btn-danger" id="cancel-btn" style="display:none" aria-label="取消当前轮次">取消</button>
         <span class="chat-header-meta">${escHtml(createdLabel)}</span>
         ${renderSessionInfoPopover(t)}
       </div>
@@ -2847,7 +2847,7 @@ function renderChatThread(t: Thread): string {
     <div class="message-list-wrap">
       <div class="message-list" id="message-list"></div>
       <button class="scroll-bottom-btn" id="scroll-bottom-btn"
-              aria-label="Scroll to bottom" style="display:none">↓</button>
+              aria-label="滚动到底部" style="display:none">↓</button>
     </div>
 
     <div class="input-area">
@@ -2856,23 +2856,23 @@ function renderChatThread(t: Thread): string {
         <textarea
           id="message-input"
           class="message-input"
-          placeholder="Type a message…"
+          placeholder="输入消息…"
           rows="1"
-          aria-label="Message input"
+          aria-label="消息输入"
         ></textarea>
         <div class="input-compose-bar">
           <div class="thread-config-switches">
-            ${renderComposerConfigSwitch('model', 'Model', modelPickerData, modelPickerLabels, isSwitching)}
+            ${renderComposerConfigSwitch('model', '模型', modelPickerData, modelPickerLabels, isSwitching)}
             ${showReasoningSwitch
-              ? renderComposerConfigSwitch('reasoning', 'Reasoning', reasoningPickerData, reasoningPickerLabels, isSwitching)
+              ? renderComposerConfigSwitch('reasoning', '思考', reasoningPickerData, reasoningPickerLabels, isSwitching)
               : ''}
           </div>
-          <button class="btn btn-primary btn-send" id="send-btn" aria-label="Send message">
+          <button class="btn btn-primary btn-send" id="send-btn" aria-label="发送消息">
             ${iconSend}
           </button>
         </div>
       </div>
-      <div class="input-hint">Press <kbd>⌘ Enter</kbd> to send · <kbd>Esc</kbd> to cancel · Type <kbd>/</kbd> for slash commands</div>
+      <div class="input-hint">按 <kbd>⌘ Enter</kbd> 发送 · <kbd>Esc</kbd> 取消 · 输入 <kbd>/</kbd> 查看斜杠命令</div>
     </div>`
 }
 
@@ -3053,8 +3053,8 @@ function bindThreadConfigSwitches(thread: Thread): void {
     } catch (err) {
       renderConfigUI()
       const message = err instanceof Error ? err.message : String(err)
-      const targetLabel = configId.toLowerCase() === 'model' ? 'model' : 'config option'
-      window.alert(`Failed to update ${targetLabel}: ${message}`)
+      const targetLabel = configId.toLowerCase() === 'model' ? '模型' : '配置项'
+      window.alert(`更新${targetLabel}失败：${message}`)
     } finally {
       setSwitching(false)
       renderConfigUI()
@@ -3073,7 +3073,7 @@ function bindThreadConfigSwitches(thread: Thread): void {
         if (store.get().activeThreadId !== thread.threadId) return
         renderConfigUI()
         const message = err instanceof Error ? err.message : String(err)
-        window.alert(`Failed to load agent config options: ${message}`)
+        window.alert(`加载 Agent 配置项失败：${message}`)
       })
   }
 
@@ -3494,7 +3494,7 @@ function handleSend(): void {
         content:      partialContent,
         timestamp:    now,
         status:       'error',
-        errorMessage: 'Connection lost',
+        errorMessage: '连接已断开',
         planEntries:  finalPlanEntries,
         toolCalls:    finalToolCalls,
         reasoning:    hasReasoningText(finalReasoning) ? finalReasoning : undefined,
@@ -3544,7 +3544,7 @@ function renderShell(): void {
             <div class="sidebar-brand-icon">N</div>
             <span>Ngent</span>
           </div>
-          <button class="btn btn-icon" id="new-thread-btn" title="New agent" aria-label="New agent">
+          <button class="btn btn-icon" id="new-thread-btn" title="新建 Agent" aria-label="新建 Agent">
             ${iconPlus}
           </button>
         </div>
@@ -3554,8 +3554,8 @@ function renderShell(): void {
             id="search-input"
             class="search-input"
             type="search"
-            placeholder="Search agents…"
-            aria-label="Search agents"
+            placeholder="搜索 Agent…"
+            aria-label="搜索 Agent"
           />
         </div>
 
@@ -3565,7 +3565,7 @@ function renderShell(): void {
 
         <div class="sidebar-footer">
           <button class="btn btn-ghost sidebar-settings-btn" id="settings-btn">
-            ${iconSettings} Settings
+            ${iconSettings} 设置
           </button>
         </div>
 
@@ -3578,9 +3578,9 @@ function renderShell(): void {
 
       <aside class="session-sidebar" id="session-sidebar">
         <div class="session-panel-header">
-          <h3 class="session-panel-title">Sessions</h3>
+          <h3 class="session-panel-title">会话</h3>
         </div>
-        <div class="session-panel-empty">Select an agent to browse ACP sessions.</div>
+        <div class="session-panel-empty">请选择一个 Agent 以浏览 ACP 会话。</div>
       </aside>
     </div>`
 
@@ -3734,7 +3734,7 @@ async function init(): Promise<void> {
     const el = document.getElementById('thread-list')
     if (el) {
       el.innerHTML = `<div class="thread-list-empty" style="color:var(--error)">
-        Failed to load agents.<br>Check the server connection in Settings.
+        加载 Agent 列表失败。<br>请在“设置”中检查服务器连接。
       </div>`
     }
   }

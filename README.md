@@ -4,40 +4,39 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/beyond5959/ngent)](https://go.dev/)
 [![License](https://img.shields.io/github/license/beyond5959/ngent)](LICENSE)
 
-> **Web Service Wrapper for ACP-compatible Agents**
+> **面向 ACP 兼容 Agent 的 Web 服务封装器**
 >
-> Ngent wraps command-line agents that speak the [Agent Client Protocol (ACP)](https://github.com/beyond5959/acp-adapter) into a web service, making them accessible via HTTP API and Web UI.
+> Ngent 将支持 [Agent Client Protocol (ACP)](https://github.com/beyond5959/acp-adapter) 的命令行 Agent 封装为 Web 服务，使其能够通过 HTTP API 和 Web UI 访问。
 
-## What is Ngent?
+## 什么是 Ngent？
 
-Ngent acts as a bridge between **ACP-compatible agents** (like Claude Code, Codex, Gemini CLI, Kimi CLI) and **web clients**:
+Ngent 充当 **兼容 ACP 的 Agent**（如 Claude Code、Codex、Gemini CLI、Kimi CLI）与 **Web 客户端** 之间的桥梁：
 
 ```
 ┌─────────────┐     HTTP/WebSocket     ┌─────────┐     JSON-RPC (ACP)     ┌──────────────┐
-│  Web UI     │ ◄────────────────────► │  Ngent  │ ◄────────────────────► │  CLI Agent   │
-│  /v1/* API  │   SSE streaming        │  Server │   stdio                │  (ACP-based) │
+│   Web UI    │ ◄────────────────────► │  Ngent  │ ◄────────────────────► │  CLI Agent   │
+│   /v1/* API │   SSE streaming        │ Server  │   stdio                │ （基于 ACP） │
 └─────────────┘                        └─────────┘                        └──────────────┘
 ```
 
-### How it Works
+### 工作原理
 
-1. **ACP Protocol**: Agents like Claude Code, Codex, and Kimi CLI expose their capabilities through the Agent Client Protocol (ACP) — a JSON-RPC protocol over stdio
-2. **Ngent Bridge**: Ngent spawns these CLI agents as child processes and translates their ACP protocol into HTTP/JSON APIs
-3. **Web Interface**: Provides a built-in Web UI and REST API for creating conversations, sending prompts, and managing permissions
+1. **ACP 协议**：Claude Code、Codex、Kimi CLI 等 Agent 通过 Agent Client Protocol（ACP）暴露能力 —— 这是一种基于 stdio 的 JSON-RPC 协议。
+2. **Ngent 桥接层**：Ngent 以子进程方式启动这些 CLI Agent，并将其 ACP 协议转换为 HTTP/JSON API。
+3. **Web 界面**：内置 Web UI 和 REST API，可用于创建会话、发送提示词以及管理权限。
 
-### Features
+### 特性
 
-- 🔌 **Multi-Agent Support**: Works with any ACP-compatible agent (Codex, Claude Code, Gemini, Kimi, Qwen, OpenCode)
-- 🌐 **Web API**: HTTP/JSON endpoints with Server-Sent Events (SSE) for streaming responses
-- 🖥️ **Built-in UI**: No separate frontend deployment needed — the web UI is embedded in the binary
-- 🔒 **Permission Control**: Fine-grained approval system for agent file/system operations
-- 💾 **Persistent State**: SQLite-backed conversation history across sessions
-- 📱 **Mobile Friendly**: QR code for easy access from mobile devices on the same network
+- 🔌 **多 Agent 支持**：适配任意兼容 ACP 的 Agent（Codex、Claude Code、Gemini、Kimi、Qwen、OpenCode）
+- 🌐 **Web API**：提供 HTTP/JSON 接口，并通过 Server-Sent Events（SSE）流式返回响应
+- 🖥️ **内置界面**：无需单独部署前端，Web UI 已嵌入二进制文件
+- 🔒 **权限控制**：对 Agent 的文件/系统操作提供细粒度审批机制
+- 💾 **持久化状态**：基于 SQLite 保存跨会话的对话历史
+- 📱 **移动端友好**：支持二维码，方便同一局域网内的手机访问
 
+## 支持的 Agent
 
-## Supported Agents
-
-| Agent | Supported |
+| Agent | 是否支持 |
 |---|---|
 | Codex | ✅ |
 | Claude Code | ✅ |
@@ -46,59 +45,57 @@ Ngent acts as a bridge between **ACP-compatible agents** (like Claude Code, Code
 | Qwen Code | ✅ |
 | OpenCode | ✅ |
 
+## 安装
 
-
-## Installation
-
-### Quick Install (recommended for Linux/macOS)
+### 快速安装（推荐 Linux/macOS）
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/beyond5959/ngent/master/install.sh | bash
 
-# Or install to a custom directory:
+# 或安装到自定义目录：
 curl -sSL https://raw.githubusercontent.com/beyond5959/ngent/master/install.sh | INSTALL_DIR=~/.local/bin bash
 ```
 
-## Run
+## 运行
 
-Start with default settings (local-only):
+使用默认配置启动（仅本机访问）：
 
 ```bash
 ngent
 ```
 
-LAN-accessible mode (allows connections from other devices):
+局域网可访问模式（允许其他设备连接）：
 
 ```bash
 ngent --allow-public=true
 ```
 
-Custom port:
+自定义端口：
 
 ```bash
 ngent --port 8080
 ```
 
-With authentication:
+启用认证：
 
 ```bash
 ngent --auth-token "your-token"
 ```
 
-Show all options:
+查看全部选项：
 
 ```bash
 ngent --help
 ```
 
-**Default paths:**
-- Database: `$HOME/.ngent/ngent.db`
+**默认路径：**
+- 数据库：`$HOME/.ngent/ngent.db`
 
-Notes:
+说明：
 
-- `/v1/*` requests must include `X-Client-ID`.
+- 所有 `/v1/*` 请求都必须包含 `X-Client-ID`。
 
-## Quick Check
+## 快速检查
 
 ```bash
 curl -s http://127.0.0.1:8686/healthz
@@ -107,4 +104,4 @@ curl -s -H "X-Client-ID: demo" http://127.0.0.1:8686/v1/agents
 
 ## Web UI
 
-Open the URL shown in the startup output (e.g., `http://127.0.0.1:8686/`). 
+打开启动输出中显示的 URL（例如：`http://127.0.0.1:8686/`）。

@@ -12,6 +12,21 @@ interface MountOptions {
   onResolved?: (outcome: ResolveOutcome) => void
 }
 
+function approvalLabel(value: string): string {
+  switch (value.trim().toLowerCase()) {
+    case 'command':
+      return '命令'
+    case 'file':
+      return '文件'
+    case 'network':
+      return '网络'
+    case 'mcp':
+      return 'MCP'
+    default:
+      return value
+  }
+}
+
 // ── Public entry point ────────────────────────────────────────────────────
 
 /**
@@ -48,8 +63,8 @@ function buildHtml(event: PermissionRequiredPayload, timeoutMs: number): string 
       <div class="permission-card" id="perm-card-${pid}">
 
         <div class="permission-card-header">
-          <span class="permission-badge permission-badge--${escHtml(approval)}">${escHtml(approval)}</span>
-          <span class="permission-card-title">Permission Required</span>
+          <span class="permission-badge permission-badge--${escHtml(approval)}">${escHtml(approvalLabel(approval))}</span>
+          <span class="permission-card-title">需要权限</span>
         </div>
 
         <div class="permission-card-body">
@@ -59,8 +74,8 @@ function buildHtml(event: PermissionRequiredPayload, timeoutMs: number): string 
         <div class="permission-card-footer">
           <span class="permission-countdown" id="perm-cd-${pid}">${formatRemaining(timeoutMs)}</span>
           <div class="permission-actions" id="perm-actions-${pid}">
-            <button class="btn btn-sm btn-success" id="perm-allow-${pid}">Allow</button>
-            <button class="btn btn-sm btn-danger"  id="perm-deny-${pid}">Deny</button>
+            <button class="btn btn-sm btn-success" id="perm-allow-${pid}">允许</button>
+            <button class="btn btn-sm btn-danger"  id="perm-deny-${pid}">拒绝</button>
           </div>
         </div>
 
@@ -185,9 +200,9 @@ function showResolved(
   // Replace Allow/Deny buttons with a resolved label
   if (actionsEl) {
     const label =
-      outcome === 'approved' ? '✓ Approved'             :
-      outcome === 'declined' ? '✗ Denied'               :
-                               '⏱ Timed out (auto-denied)'
+      outcome === 'approved' ? '✓ 已允许'               :
+      outcome === 'declined' ? '✗ 已拒绝'               :
+                               '⏱ 已超时（自动拒绝）'
     actionsEl.innerHTML = `
       <span class="permission-resolved permission-resolved--${outcome}">${label}</span>`
   }

@@ -70,7 +70,7 @@ Turn-side auxiliary callbacks:
 
 - hidden reasoning/thinking deltas are forwarded separately from visible assistant text.
 - reasoning is streamed/persisted as `reasoning_delta` events instead of being merged into `responseText`.
-- the Web UI renders reasoning in a lightweight collapsible reasoning toggle: labeled `Thinking` during live streaming, relabeled `Thought` once finalized history is reconstructed, collapsed by default after completion, with indented left-border content when opened and sanitized markdown rendering for finalized reasoning text.
+- the Web UI renders reasoning in a lightweight collapsible reasoning toggle: labeled `思考中` during live streaming, relabeled `思考过程` once finalized history is reconstructed, collapsed by default after completion, with indented left-border content when opened and sanitized markdown rendering for finalized reasoning text.
 - plan replacements continue to flow as `plan_update`.
 
 ## 6. Persistence Model

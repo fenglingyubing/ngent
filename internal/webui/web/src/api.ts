@@ -86,7 +86,7 @@ class ApiClient {
         body: body !== undefined ? JSON.stringify(body) : undefined,
       })
     } catch (err) {
-      throw new ApiError(`Network error: ${String(err)}`, 'NETWORK_ERROR', 0)
+      throw new ApiError(`网络错误：${String(err)}`, 'NETWORK_ERROR', 0)
     }
 
     if (!res.ok) {

@@ -41,17 +41,17 @@ export function formatTimestamp(iso: string): string {
 
 /**
  * Returns a human-readable relative time string.
- * e.g. "just now", "3m", "2h", "5d"
+ * e.g. "刚刚", "3分", "2小时", "5天"
  */
 export function formatRelativeTime(iso: string): string {
   const d = new Date(iso)
   if (isNaN(d.getTime())) return ''
 
   const diffMs = Date.now() - d.getTime()
-  if (diffMs < 60_000) return 'just now'
-  if (diffMs < 3_600_000) return `${Math.floor(diffMs / 60_000)}m`
-  if (diffMs < 86_400_000) return `${Math.floor(diffMs / 3_600_000)}h`
-  return `${Math.floor(diffMs / 86_400_000)}d`
+  if (diffMs < 60_000) return '刚刚'
+  if (diffMs < 3_600_000) return `${Math.floor(diffMs / 60_000)}分`
+  if (diffMs < 86_400_000) return `${Math.floor(diffMs / 3_600_000)}小时`
+  return `${Math.floor(diffMs / 86_400_000)}天`
 }
 
 // ── Path validation ────────────────────────────────────────────────────────
