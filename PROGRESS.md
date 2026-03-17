@@ -13,6 +13,83 @@ This file is the source of milestone progress, validation commands, and next act
 
 ## Latest Update (2026-03-17)
 
+- `Post-M8` Web UI mobile chat layout refined for phone screens:
+  - tightened the mobile header and empty state, added safe-area-aware spacing, reduced wasted vertical space, and switched the composer controls to a stacked touch-first layout on narrow screens.
+  - aligned attachment chips, model pickers, preview modal, and new-thread modal with mobile viewport constraints so the chat surface behaves more like a native app on phones.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `PATH=/usr/local/go/bin:$PATH go test ./...`
+
+- `Post-M8` Web UI typography increased by one size step for better readability:
+  - raised the shared CSS font-size scale (`xs` through `lg`) so chat bubbles, composer text, attachment chips, and surrounding UI labels all render slightly larger without changing the layout structure.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `PATH=/usr/local/go/bin:$PATH go test ./...`
+
+- `Post-M8` Web composer now preserves draft text and focus across attachment uploads:
+  - fixed the no-framework chat composer so upload success / attachment removal no longer wipe the textarea when `updateChatArea()` re-renders the input area.
+  - added per-thread draft caching for the active composer, restore-on-render behavior, and focus restoration after upload/paste flows so users can keep typing immediately after attaching files.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `PATH=/usr/local/go/bin:$PATH go test ./...`
+
+- `Post-M8` Codex image attachments now use true multimodal prompt blocks:
+  - added an optional agent-side `ContentStreamer` contract for structured prompt content while keeping the existing plain-text `Streamer` path intact.
+  - implemented structured prompt delivery for the embedded Codex provider, so bound image attachments are now sent as real image blocks alongside the existing text context/OCR metadata instead of OCR-only prompt text.
+  - kept the existing injected text prompt as the fallback for non-multimodal agents, preserving current behavior for text attachments and providers that still only implement plain-text turns.
+  - validation:
+    - pass: `PATH=/usr/local/go/bin:$PATH go test ./internal/agents/codex`
+    - pass: `PATH=/usr/local/go/bin:$PATH go test ./internal/httpapi`
+    - pass: `PATH=/usr/local/go/bin:$PATH go test ./...`
+
+- `Post-M8` image attachment OCR prompt injection completed:
+  - extended attachment prompt injection so image attachments now attempt local OCR extraction before the model turn starts, while text/json attachments continue injecting direct text previews.
+  - added optional runtime integration with local `tesseract`, preferring `chi_sim+eng` and falling back to `eng`, so pasted screenshots/doc images can contribute OCR text to the model prompt on the deployed server.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `/usr/local/go/bin/go test ./... -count=1`
+    - pass: server runtime has `tesseract 5.3.4` with `chi_sim`, `eng`, `osd`
+
+- `Post-M8` Web chat asset hardening and documentation completed:
+  - added structured upload lifecycle logs (`storage.upload_stored`, `storage.upload_rejected`, `storage.upload_deleted`) alongside the existing quota-cleanup logs, and covered them with HTTP API log assertions.
+  - expanded the public API/DB documentation for uploads, attachments, storage quota, attachment-in-history payloads, and upload status/quota state rules.
+  - completed the A7 acceptance pass with targeted upload/quota log tests, frontend production build validation, and a clean repository-wide `go test ./...`.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `/usr/local/go/bin/go test ./... -count=1`
+
+- `Post-M8` Web chat automatic quota cleanup completed:
+  - added storage-layer oldest-first quota cleanup that soft-deletes uploads, removes original + thumbnail files together, and rewrites `storage_usage.used_bytes` until usage is back within the configured limit.
+  - wired cleanup into upload pre-check, upload post-write recheck, startup reconciliation, and a periodic janitor loop; unrecoverable over-quota uploads now return `409 QUOTA_EXCEEDED`.
+  - added structured `storage.quota_deleted` stderr logs for each automatic cleanup action and expanded storage/httpapi acceptance coverage for auto-cleanup behavior.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `/usr/local/go/bin/go test ./... -count=1`
+
+- `Post-M8` Web chat storage quota visibility completed:
+  - added `GET /v1/storage` plus storage usage percentage/policy response fields for the global chat-asset quota.
+  - reconciled `storage_usage.used_bytes` against real on-disk upload + thumbnail files during startup, and updated upload/delete paths so quota usage now tracks both originals and generated thumbnails.
+  - added `DELETE /v1/uploads/{uploadId}` to soft-delete uploads, remove stored files, and drop quota usage immediately; the embedded Web UI now shows current storage usage in the chat header with warning states above 80% and 95%.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `/usr/local/go/bin/go test ./... -count=1`
+
+- `Post-M8` Web chat attachment download and thumbnail support completed:
+  - added `GET /v1/attachments/{uploadId}` and `GET /v1/attachments/{uploadId}/thumbnail` with same-client isolation, deleted-attachment `404`, safe `Content-Disposition`, and direct file serving from persisted upload metadata.
+  - generate PNG thumbnails for uploaded images at upload time and persist the thumbnail path alongside the original asset row for later history/UI reuse.
+  - updated the embedded Web UI attachment cards to load authenticated thumbnails, open a full-image preview modal for images, and fetch/download regular files via authenticated blob requests.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `PATH=/usr/local/go/bin:$PATH /usr/local/go/bin/go test ./... -count=1`
+
+- `Post-M8` Web chat attachment turn binding completed:
+  - extended `POST /v1/threads/{threadId}/turns` to accept `attachments`, allowing attachment-only user turns and binding uploaded assets to the created turn before streaming.
+  - added atomic upload-to-turn binding plus turn-history attachment summaries, with conflict protection so an already attached upload cannot be reused by another thread/turn.
+  - updated the embedded Web UI to send pending uploads with the turn request and render user-side attachment cards in chat history for images and regular files.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `PATH=/usr/local/go/bin:$PATH /usr/local/go/bin/go test ./... -count=1`
+
 - `Post-M8` Web UI Chinese localization completed:
   - translated the core embedded Web UI surface into Chinese across the sidebar, session panel, composer, settings drawer, new-agent modal, permission cards, markdown copy/expand controls, and chat/system status text.
   - localized reasoning labels to `思考中` during streaming and `思考过程` after completion, and aligned acceptance/spec/ADR docs with the new UI wording.

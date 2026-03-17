@@ -18,6 +18,8 @@ import type {
   SessionInfo,
   SessionTranscriptMessage,
   ToolCall,
+  UploadedAsset,
+  StorageUsageInfo,
 } from './types.ts'
 import type {
   TurnStream,
@@ -93,6 +95,16 @@ const iconChevronRight = `<svg width="12" height="12" viewBox="0 0 24 24" fill="
   <path d="m9 18 6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`
 
+const iconDownload = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+  <path d="M12 4v10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="m8 10 4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M5 19h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+</svg>`
+
+const iconClose = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+  <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+</svg>`
+
 const codexIconURL = '/codex-icon.png'
 const geminiIconURL = '/gemini-icon.png'
 const claudeIconURL = '/claude-icon.png'
@@ -124,6 +136,11 @@ const sessionPanelStateByThread = new Map<string, SessionPanelState>()
 const sessionPanelRequestSeqByThread = new Map<string, number>()
 const sessionPanelScrollTopByThread = new Map<string, number>()
 let sessionPanelRequestSeq = 0
+const pendingUploadsByThread = new Map<string, UploadedAsset[]>()
+const composerDraftByThread = new Map<string, string>()
+const uploadInFlightThreads = new Set<string>()
+const attachmentObjectURLCache = new Map<string, string>()
+const attachmentObjectURLInFlight = new Map<string, Promise<string>>()
 
 function cloneConfigOptions(options: ConfigOption[]): ConfigOption[] {
   return options.map(option => ({
@@ -1906,6 +1923,7 @@ function turnsToMessages(turns: Turn[]): Message[] {
         id:        `${t.turnId}-u`,
         role:      'user',
         content:   t.requestText,
+        attachments: t.attachments,
         timestamp: t.createdAt,
         status:    'done',
         turnId:    t.turnId,
@@ -2339,6 +2357,145 @@ function renderReasoningSectionHTML(
     </div>`
 }
 
+function renderAttachmentCardsHTML(attachments: UploadedAsset[] | undefined, role: Message['role']): string {
+  if (!attachments?.length) return ''
+  return `
+    <div class="message-attachments">
+      ${attachments.map(item => {
+        const deletedClass = item.deleted ? ' message-attachment-card--deleted' : ''
+        const kindClass = item.kind === 'image' ? ' message-attachment-card--image' : ' message-attachment-card--file'
+        const deletedBadge = item.deleted ? '<span class="message-attachment-card__badge">不可用</span>' : ''
+        const mimeLine = item.mimeType ? `<span class="message-attachment-card__meta">${escHtml(item.mimeType)}</span>` : ''
+        const actionHTML = item.deleted
+          ? ''
+          : item.kind === 'image'
+            ? `<button class="message-attachment-card__action" type="button" data-preview-upload="${escHtml(item.uploadId)}" data-preview-name="${escHtml(item.name)}" aria-label="预览图片">查看大图</button>`
+            : `<button class="message-attachment-card__action" type="button" data-download-upload="${escHtml(item.uploadId)}" data-download-name="${escHtml(item.name)}" aria-label="下载附件">${iconDownload}<span>下载</span></button>`
+        const previewHTML = item.kind === 'image' && !item.deleted
+          ? `<button class="message-attachment-card__preview" type="button" data-preview-upload="${escHtml(item.uploadId)}" data-preview-name="${escHtml(item.name)}" aria-label="预览图片">
+              <img class="message-attachment-card__thumb" alt="${escHtml(item.name)}" data-attachment-thumb="${escHtml(item.uploadId)}" />
+            </button>`
+          : `<div class="message-attachment-card__icon" aria-hidden="true">${item.kind === 'image' ? '🖼' : '📎'}</div>`
+        return `
+          <div class="message-attachment-card${kindClass}${deletedClass}" data-role="${escHtml(role)}">
+            ${previewHTML}
+            <div class="message-attachment-card__copy">
+              <div class="message-attachment-card__title-row">
+                <span class="message-attachment-card__name">${escHtml(item.name)}</span>
+                ${deletedBadge}
+              </div>
+              <div class="message-attachment-card__meta-row">
+                ${mimeLine}
+                <span class="message-attachment-card__meta">${escHtml(formatBytes(item.sizeBytes))}</span>
+              </div>
+              ${actionHTML ? `<div class="message-attachment-card__actions">${actionHTML}</div>` : ''}
+            </div>
+          </div>`
+      }).join('')}
+    </div>`
+}
+
+function attachmentCacheKey(uploadId: string, thumbnail: boolean): string {
+  return `${uploadId}::${thumbnail ? 'thumb' : 'full'}`
+}
+
+async function resolveAttachmentObjectURL(uploadId: string, thumbnail: boolean): Promise<string> {
+  const cacheKey = attachmentCacheKey(uploadId, thumbnail)
+  const cached = attachmentObjectURLCache.get(cacheKey)
+  if (cached) return cached
+
+  const inFlight = attachmentObjectURLInFlight.get(cacheKey)
+  if (inFlight) return inFlight
+
+  const request = api.fetchAttachmentBlob(uploadId, thumbnail).then(result => {
+    const objectURL = URL.createObjectURL(result.blob)
+    attachmentObjectURLCache.set(cacheKey, objectURL)
+    attachmentObjectURLInFlight.delete(cacheKey)
+    return objectURL
+  }).catch(err => {
+    attachmentObjectURLInFlight.delete(cacheKey)
+    throw err
+  })
+  attachmentObjectURLInFlight.set(cacheKey, request)
+  return request
+}
+
+async function triggerAttachmentDownload(uploadId: string, fallbackName: string): Promise<void> {
+  const result = await api.fetchAttachmentBlob(uploadId, false)
+  const objectURL = URL.createObjectURL(result.blob)
+  const anchor = document.createElement('a')
+  anchor.href = objectURL
+  anchor.download = result.fileName || fallbackName || uploadId
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(objectURL), 1000)
+}
+
+async function openAttachmentPreview(uploadId: string, fallbackName: string): Promise<void> {
+  const modalEl = document.getElementById('attachment-preview-modal') as HTMLDivElement | null
+  const imageEl = document.getElementById('attachment-preview-image') as HTMLImageElement | null
+  const titleEl = document.getElementById('attachment-preview-title') as HTMLDivElement | null
+  const statusEl = document.getElementById('attachment-preview-status') as HTMLDivElement | null
+  if (!modalEl || !imageEl || !titleEl || !statusEl) return
+
+  titleEl.textContent = fallbackName
+  statusEl.textContent = '正在加载图片…'
+  imageEl.removeAttribute('src')
+  modalEl.hidden = false
+  document.body.classList.add('attachment-preview-open')
+
+  try {
+    imageEl.src = await resolveAttachmentObjectURL(uploadId, false)
+    statusEl.textContent = ''
+  } catch (err) {
+    statusEl.textContent = err instanceof Error ? err.message : '图片加载失败'
+  }
+}
+
+function closeAttachmentPreview(): void {
+  const modalEl = document.getElementById('attachment-preview-modal') as HTMLDivElement | null
+  const imageEl = document.getElementById('attachment-preview-image') as HTMLImageElement | null
+  const statusEl = document.getElementById('attachment-preview-status') as HTMLDivElement | null
+  if (modalEl) modalEl.hidden = true
+  if (imageEl) imageEl.removeAttribute('src')
+  if (statusEl) statusEl.textContent = ''
+  document.body.classList.remove('attachment-preview-open')
+}
+
+function bindAttachmentCards(listEl: HTMLElement): void {
+  listEl.querySelectorAll<HTMLImageElement>('[data-attachment-thumb]').forEach(imgEl => {
+    const uploadId = imgEl.dataset.attachmentThumb?.trim() ?? ''
+    if (!uploadId || imgEl.dataset.bound === 'true') return
+    imgEl.dataset.bound = 'true'
+    void resolveAttachmentObjectURL(uploadId, true).then(objectURL => {
+      imgEl.src = objectURL
+    }).catch(() => {
+      imgEl.closest('.message-attachment-card__preview')?.classList.add('message-attachment-card__preview--empty')
+    })
+  })
+
+  listEl.querySelectorAll<HTMLButtonElement>('[data-preview-upload]').forEach(buttonEl => {
+    if (buttonEl.dataset.bound === 'true') return
+    buttonEl.dataset.bound = 'true'
+    buttonEl.addEventListener('click', () => {
+      const uploadId = buttonEl.dataset.previewUpload?.trim() ?? ''
+      if (!uploadId) return
+      void openAttachmentPreview(uploadId, buttonEl.dataset.previewName?.trim() ?? uploadId)
+    })
+  })
+
+  listEl.querySelectorAll<HTMLButtonElement>('[data-download-upload]').forEach(buttonEl => {
+    if (buttonEl.dataset.bound === 'true') return
+    buttonEl.dataset.bound = 'true'
+    buttonEl.addEventListener('click', () => {
+      const uploadId = buttonEl.dataset.downloadUpload?.trim() ?? ''
+      if (!uploadId) return
+      void triggerAttachmentDownload(uploadId, buttonEl.dataset.downloadName?.trim() ?? uploadId)
+    })
+  })
+}
+
 function renderMessage(msg: Message, agentAvatar: string): string {
   const renderMessageCopyBtn = (text: string): string => `
     <button
@@ -2351,13 +2508,16 @@ function renderMessage(msg: Message, agentAvatar: string): string {
 
   if (msg.role === 'user') {
     const copyBtn = renderMessageCopyBtn(msg.content)
+    const attachmentsHTML = renderAttachmentCardsHTML(msg.attachments, msg.role)
+    const bubbleHTML = msg.content ? `<div class="message-bubble">${escHtml(msg.content)}</div>` : ''
     return `
       <div class="message message--user" data-msg-id="${escHtml(msg.id)}">
         <div class="message-group">
-          <div class="message-bubble">${escHtml(msg.content)}</div>
+          ${attachmentsHTML}
+          ${bubbleHTML}
           <div class="message-meta">
             <span class="message-time">${formatTimestamp(msg.timestamp)}</span>
-            ${copyBtn}
+            ${msg.content ? copyBtn : ''}
           </div>
         </div>
       </div>`
@@ -2382,6 +2542,7 @@ function renderMessage(msg: Message, agentAvatar: string): string {
   )
   const hasSupplementarySections = !!msg.planEntries?.length || !!msg.toolCalls?.length || hasReasoningText(msg.reasoning)
   const shouldRenderBubble = !(isDone && !msg.content && hasSupplementarySections)
+  const attachmentsHTML = renderAttachmentCardsHTML(msg.attachments, msg.role)
 
   // Render markdown only for finalised done messages
   let bubbleExtra = ''
@@ -2410,6 +2571,7 @@ function renderMessage(msg: Message, agentAvatar: string): string {
         ${planHTML}
         ${toolCallsHTML}
         ${reasoningHTML}
+        ${attachmentsHTML}
         ${bubbleHTML}
         <div class="message-meta">
           <span class="message-time">${formatTimestamp(msg.timestamp)}</span>
@@ -2548,6 +2710,7 @@ function updateMessageList(): void {
   listEl.innerHTML = msgs.map(m => renderMessage(m, agentAvatar)).join('')
   bindMarkdownControls(listEl)
   bindReasoningPanels(listEl)
+  bindAttachmentCards(listEl)
   listEl.scrollTop = listEl.scrollHeight
   // Sync scroll button (we just moved to the bottom)
   const scrollBtn = document.getElementById('scroll-bottom-btn')
@@ -2565,12 +2728,15 @@ function updateInputState(): void {
   const sendBtn  = document.getElementById('send-btn')   as HTMLButtonElement   | null
   const cancelBtn = document.getElementById('cancel-btn') as HTMLButtonElement   | null
   const inputEl  = document.getElementById('message-input') as HTMLTextAreaElement | null
+  const uploadBtn = document.getElementById('upload-btn') as HTMLButtonElement | null
   const isSwitchingConfig = !!activeThreadId && threadConfigSwitching.has(activeThreadId)
   const isSwitchingSession = !!activeThreadId && sessionSwitchingThreads.has(activeThreadId)
   const hasThreadStreaming = hasThreadStream(activeThreadId)
+  const uploadBusy = !!activeThreadId && uploadInFlightThreads.has(activeThreadId)
 
   if (sendBtn)  sendBtn.disabled  = isStreaming || isSwitchingConfig || isSwitchingSession
   if (inputEl)  inputEl.disabled  = isStreaming || isSwitchingConfig || isSwitchingSession
+  if (uploadBtn) uploadBtn.disabled = isStreaming || isSwitchingConfig || isSwitchingSession || uploadBusy
   document.querySelectorAll<HTMLButtonElement>('.thread-model-trigger').forEach(triggerEl => {
     const pickerState = triggerEl.dataset.state ?? 'empty'
     const configID = triggerEl.dataset.configId?.trim() ?? ''
@@ -2711,10 +2877,10 @@ function selectSlashCommand(commandName: string): void {
   if (!command) return
 
   inputEl.value = `/${command.name}${command.inputHint ? ' ' : ''}`
+  composerDraftByThread.set(activeThreadId, inputEl.value)
   inputEl.focus()
   inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length)
-  inputEl.style.height = 'auto'
-  inputEl.style.height = Math.min(inputEl.scrollHeight, 220) + 'px'
+  resizeComposerInput(inputEl)
   resetSlashCommandLookup()
   closeSlashCommandMenu()
 }
@@ -2779,6 +2945,25 @@ function renderSessionInfoPopover(thread: Thread): string {
     </div>`
 }
 
+function renderStorageUsageIndicator(usage: StorageUsageInfo | null): string {
+  if (!usage) return ''
+  const percent = Math.max(0, Math.min(100, Math.round(usage.usagePercent)))
+  const state = percent >= 95 ? 'danger' : percent >= 80 ? 'warning' : 'normal'
+  const label = percent >= 95
+    ? '存储空间接近上限'
+    : percent >= 80
+      ? '存储空间偏高'
+      : '存储空间'
+  return `
+    <div class="storage-usage storage-usage--${state}" title="${escHtml(`${formatBytes(usage.usedBytes)} / ${formatBytes(usage.maxBytes)}`)}">
+      <div class="storage-usage__copy">
+        <span class="storage-usage__label">${escHtml(label)}</span>
+        <span class="storage-usage__value">${escHtml(formatBytes(usage.usedBytes))} / ${escHtml(formatBytes(usage.maxBytes))}</span>
+      </div>
+      <span class="storage-usage__percent">${escHtml(`${percent}%`)}</span>
+    </div>`
+}
+
 function renderSlashCommandMenuItem(command: SlashCommand, active: boolean): string {
   const inputHint = command.inputHint?.trim() ?? ''
   return `
@@ -2825,6 +3010,9 @@ function renderChatThread(t: Thread): string {
   )
   const showReasoningSwitch = shouldShowReasoningSwitch(reasoningOption)
   const isSwitching = threadConfigSwitching.has(t.threadId)
+  const pendingUploads = pendingUploadsByThread.get(t.threadId) ?? []
+  const uploadBusy = uploadInFlightThreads.has(t.threadId)
+  const storageUsage = store.get().storageUsage
 
   return `
     <div class="chat-header">
@@ -2835,6 +3023,7 @@ function renderChatThread(t: Thread): string {
             <h2 class="chat-title" title="${escHtml(titleLabel)}">${escHtml(titleLabel)}</h2>
             <span class="badge badge--agent">${escHtml(t.agent ?? '')}</span>
           </div>
+          ${renderStorageUsageIndicator(storageUsage)}
         </div>
       </div>
       <div class="chat-header-right">
@@ -2853,6 +3042,20 @@ function renderChatThread(t: Thread): string {
     <div class="input-area">
       <div class="slash-command-menu" id="slash-command-menu" hidden></div>
       <div class="input-wrapper">
+        <input id="upload-input" type="file" multiple hidden />
+        <div class="pending-uploads ${pendingUploads.length ? '' : 'pending-uploads--empty'}" id="pending-uploads">
+          ${pendingUploads.length
+            ? pendingUploads.map(item => `
+              <div class="upload-chip upload-chip--${escHtml(item.kind)}" data-upload-id="${escHtml(item.uploadId)}">
+                <div class="upload-chip-copy">
+                  <span class="upload-chip-name">${escHtml(item.name)}</span>
+                  <span class="upload-chip-meta">${escHtml(formatBytes(item.sizeBytes))}</span>
+                </div>
+                <button class="upload-chip-remove" type="button" data-remove-upload="${escHtml(item.uploadId)}" aria-label="移除附件">×</button>
+              </div>
+            `).join('')
+            : `<div class="pending-uploads-placeholder">支持上传文件、拖拽文件或直接粘贴图片。</div>`}
+        </div>
         <textarea
           id="message-input"
           class="message-input"
@@ -2867,12 +3070,15 @@ function renderChatThread(t: Thread): string {
               ? renderComposerConfigSwitch('reasoning', '思考', reasoningPickerData, reasoningPickerLabels, isSwitching)
               : ''}
           </div>
-          <button class="btn btn-primary btn-send" id="send-btn" aria-label="发送消息">
-            ${iconSend}
-          </button>
+          <div class="composer-actions">
+            <button class="btn btn-ghost btn-upload" id="upload-btn" type="button" aria-label="上传附件" ${uploadBusy ? 'disabled' : ''}>上传</button>
+            <button class="btn btn-primary btn-send" id="send-btn" aria-label="发送消息">
+              ${iconSend}
+            </button>
+          </div>
         </div>
       </div>
-      <div class="input-hint">按 <kbd>⌘ Enter</kbd> 发送 · <kbd>Esc</kbd> 取消 · 输入 <kbd>/</kbd> 查看斜杠命令</div>
+      <div class="input-hint">按 <kbd>⌘ Enter</kbd> 发送 · <kbd>Esc</kbd> 取消 · 输入 <kbd>/</kbd> 查看斜杠命令 · 支持拖拽与粘贴图片</div>
     </div>`
 }
 
@@ -2919,15 +3125,35 @@ function updateChatArea(): void {
   renderPendingPermissionCards(scopeKey)
 
   updateInputState()
+  bindPendingUploads(thread)
   bindSessionInfoPopover()
   bindInputResize()
   bindSendHandler()
   bindCancelHandler()
   bindThreadConfigSwitches(thread)
   bindScrollBottom()
+  restoreComposerDraft(thread.threadId)
 
   // Always reload history from server (keeps view fresh; guards against overwrites during streaming)
   void loadHistory(thread.threadId)
+}
+
+function resizeComposerInput(input: HTMLTextAreaElement): void {
+  input.style.height = 'auto'
+  input.style.height = Math.min(input.scrollHeight, 220) + 'px'
+}
+
+function restoreComposerDraft(threadId: string, focus = false): void {
+  const inputEl = document.getElementById('message-input') as HTMLTextAreaElement | null
+  if (!inputEl) return
+
+  inputEl.value = composerDraftByThread.get(threadId) ?? ''
+  resizeComposerInput(inputEl)
+  if (!focus || inputEl.disabled) return
+
+  inputEl.focus()
+  const caret = inputEl.value.length
+  inputEl.setSelectionRange(caret, caret)
 }
 
 function bindThreadConfigSwitches(thread: Thread): void {
@@ -3204,10 +3430,12 @@ function bindInputResize(): void {
   const input = document.getElementById('message-input') as HTMLTextAreaElement | null
   const menuEl = document.getElementById('slash-command-menu') as HTMLDivElement | null
   if (!input) return
-  const maxHeight = 220
   input.addEventListener('input', () => {
-    input.style.height = 'auto'
-    input.style.height = Math.min(input.scrollHeight, maxHeight) + 'px'
+    const activeThreadId = store.get().activeThreadId
+    if (activeThreadId) {
+      composerDraftByThread.set(activeThreadId, input.value)
+    }
+    resizeComposerInput(input)
     updateSlashCommandMenu()
   })
   input.addEventListener('keydown', e => {
@@ -3272,18 +3500,100 @@ function bindSendHandler(): void {
   document.getElementById('send-btn')?.addEventListener('click', handleSend)
 }
 
+function bindPendingUploads(thread: Thread): void {
+  const uploadInput = document.getElementById('upload-input') as HTMLInputElement | null
+  const uploadBtn = document.getElementById('upload-btn') as HTMLButtonElement | null
+  const wrapper = document.querySelector('.input-wrapper') as HTMLDivElement | null
+  const pendingEl = document.getElementById('pending-uploads') as HTMLDivElement | null
+  const inputEl = document.getElementById('message-input') as HTMLTextAreaElement | null
+  if (!uploadInput || !uploadBtn || !wrapper || !pendingEl || !inputEl) return
+
+  const startUpload = async (files: File[]): Promise<void> => {
+    const selected = files.filter(file => file.size > 0)
+    if (!selected.length) return
+
+    composerDraftByThread.set(thread.threadId, inputEl.value)
+    uploadInFlightThreads.add(thread.threadId)
+    updateInputState()
+    try {
+      const uploaded = await api.uploadFiles(selected)
+      const current = pendingUploadsByThread.get(thread.threadId) ?? []
+      pendingUploadsByThread.set(thread.threadId, [...current, ...uploaded])
+      const usage = await api.getStorageUsage()
+      store.set({ storageUsage: usage })
+      if (store.get().activeThreadId === thread.threadId) {
+        updateChatArea()
+        restoreComposerDraft(thread.threadId, true)
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      window.alert(`上传失败：${message}`)
+    } finally {
+      uploadInFlightThreads.delete(thread.threadId)
+      uploadInput.value = ''
+      updateInputState()
+    }
+  }
+
+  uploadBtn.addEventListener('click', () => uploadInput.click())
+  uploadInput.addEventListener('change', () => {
+    const files = Array.from(uploadInput.files ?? [])
+    void startUpload(files)
+  })
+
+  pendingEl.addEventListener('click', e => {
+    const target = e.target as HTMLElement | null
+    const uploadId = target?.getAttribute('data-remove-upload')?.trim() ?? ''
+    if (!uploadId) return
+    composerDraftByThread.set(thread.threadId, inputEl.value)
+    const current = pendingUploadsByThread.get(thread.threadId) ?? []
+    pendingUploadsByThread.set(thread.threadId, current.filter(item => item.uploadId !== uploadId))
+    updateChatArea()
+    restoreComposerDraft(thread.threadId, true)
+  })
+
+  wrapper.addEventListener('dragover', e => {
+    e.preventDefault()
+    wrapper.classList.add('input-wrapper--dragover')
+  })
+  wrapper.addEventListener('dragleave', e => {
+    e.preventDefault()
+    if (e.target === wrapper) {
+      wrapper.classList.remove('input-wrapper--dragover')
+    }
+  })
+  wrapper.addEventListener('drop', e => {
+    e.preventDefault()
+    wrapper.classList.remove('input-wrapper--dragover')
+    const files = Array.from(e.dataTransfer?.files ?? [])
+    void startUpload(files)
+  })
+
+  inputEl.addEventListener('paste', e => {
+    const items = Array.from(e.clipboardData?.items ?? [])
+    const files = items
+      .filter(item => item.kind === 'file')
+      .map(item => item.getAsFile())
+      .filter((file): file is File => !!file)
+    if (!files.length) return
+    e.preventDefault()
+    void startUpload(files)
+  })
+}
+
 function handleSend(): void {
   const inputEl = document.getElementById('message-input') as HTMLTextAreaElement | null
   if (!inputEl) return
 
   const text = inputEl.value.trim()
-  if (!text) return
 
   const { activeThreadId, threads } = store.get()
   if (!activeThreadId) return
 
   const thread = threads.find(t => t.threadId === activeThreadId)
   if (!thread || sessionSwitchingThreads.has(thread.threadId)) return
+  const pendingUploads = pendingUploadsByThread.get(thread.threadId) ?? []
+  if (!text && !pendingUploads.length) return
   const capturedThreadID = activeThreadId
   let capturedSessionID = threadSessionID(thread)
   let capturedScopeKey = threadChatScopeKey(thread)
@@ -3292,8 +3602,9 @@ function handleSend(): void {
   const agentAvatar  = renderAgentAvatar(thread?.agent ?? '', 'message')
 
   // Clear input immediately
+  composerDraftByThread.set(thread.threadId, '')
   inputEl.value = ''
-  inputEl.style.height = 'auto'
+  resizeComposerInput(inputEl)
   resetSlashCommandLookup()
   closeSlashCommandMenu()
 
@@ -3304,10 +3615,13 @@ function handleSend(): void {
     id:        generateUUID(),
     role:      'user',
     content:   text,
+    attachments: pendingUploads,
     timestamp: now,
     status:    'done',
   }
   addMessageToStore(capturedScopeKey, userMsg)
+  pendingUploadsByThread.set(thread.threadId, [])
+  updateChatArea()
 
   // ── 2. Reserve streaming message ID before touching stream state ───────────
   //    This prevents subscribe → updateMessageList from wiping the bubble.
@@ -3347,7 +3661,7 @@ function handleSend(): void {
   }
 
   // ── 5. Start SSE stream ────────────────────────────────────────────────────
-  const stream = api.startTurn(capturedThreadID, text, {
+  const stream = api.startTurn(capturedThreadID, text, pendingUploads.map(item => item.uploadId), {
 
     onTurnStarted({ turnId }) {
       const state = getScopeStreamState(capturedScopeKey)
@@ -3505,6 +3819,19 @@ function handleSend(): void {
   streamsByScope.set(capturedScopeKey, stream)
 }
 
+function formatBytes(sizeBytes: number): string {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = sizeBytes
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+  const digits = value >= 10 || unitIndex === 0 ? 0 : 1
+  return `${value.toFixed(digits)} ${units[unitIndex]}`
+}
+
 // ── Cancel ────────────────────────────────────────────────────────────────
 
 function bindCancelHandler(): void {
@@ -3582,6 +3909,22 @@ function renderShell(): void {
         </div>
         <div class="session-panel-empty">请选择一个 Agent 以浏览 ACP 会话。</div>
       </aside>
+
+      <div class="attachment-preview-modal" id="attachment-preview-modal" hidden>
+        <div class="attachment-preview-backdrop" data-close-attachment-preview="true"></div>
+        <div class="attachment-preview-dialog" role="dialog" aria-modal="true" aria-label="图片预览">
+          <div class="attachment-preview-header">
+            <div class="attachment-preview-title" id="attachment-preview-title">图片预览</div>
+            <button class="btn btn-icon attachment-preview-close" id="attachment-preview-close" type="button" aria-label="关闭预览">
+              ${iconClose}
+            </button>
+          </div>
+          <div class="attachment-preview-status" id="attachment-preview-status"></div>
+          <div class="attachment-preview-body">
+            <img class="attachment-preview-image" id="attachment-preview-image" alt="图片预览" />
+          </div>
+        </div>
+      </div>
     </div>`
 
   document.getElementById('settings-btn')?.addEventListener('click', () => settingsPanel.open())
@@ -3592,6 +3935,13 @@ function renderShell(): void {
   searchEl?.addEventListener('input', () => {
     store.set({ searchQuery: searchEl.value })
     updateThreadList()
+  })
+}
+
+function bindAttachmentPreviewModal(): void {
+  document.getElementById('attachment-preview-close')?.addEventListener('click', closeAttachmentPreview)
+  document.querySelectorAll<HTMLElement>('[data-close-attachment-preview="true"]').forEach(el => {
+    el.addEventListener('click', closeAttachmentPreview)
   })
 }
 
@@ -3621,34 +3971,41 @@ function bindGlobalShortcuts(): void {
 
     // Escape — contextual (most-specific first)
     if (e.key === 'Escape') {
-      // (1) close mobile sidebar if open
+      // (1) close attachment preview if open
+      const attachmentPreview = document.getElementById('attachment-preview-modal')
+      if (attachmentPreview && !attachmentPreview.hidden) {
+        e.preventDefault()
+        closeAttachmentPreview()
+        return
+      }
+      // (2) close mobile sidebar if open
       const sidebar = document.getElementById('sidebar')
       if (sidebar?.classList.contains('sidebar--open')) {
         sidebar.classList.remove('sidebar--open')
         return
       }
-      // (2) close thread action menu if open
+      // (3) close thread action menu if open
       if (openThreadActionMenuId) {
         e.preventDefault()
         resetThreadActionMenuState()
         updateThreadList()
         return
       }
-      // (3) close slash command menu if open
+      // (4) close slash command menu if open
       const slashCommandMenu = document.getElementById('slash-command-menu') as HTMLDivElement | null
       if (slashCommandMenu && !slashCommandMenu.hidden) {
         e.preventDefault()
         closeSlashCommandMenu()
         return
       }
-      // (4) close session info popover if open
+      // (5) close session info popover if open
       const sessionInfoPanel = document.getElementById('session-info-panel')
       if (sessionInfoPanel && !sessionInfoPanel.hidden) {
         e.preventDefault()
         closeSessionInfoPopover()
         return
       }
-      // (5) clear search if focused
+      // (6) clear search if focused
       const searchEl = document.getElementById('search-input') as HTMLInputElement | null
       if (searchEl && document.activeElement === searchEl) {
         searchEl.value = ''
@@ -3656,7 +4013,7 @@ function bindGlobalShortcuts(): void {
         searchEl.blur()
         return
       }
-      // (6) cancel active stream
+      // (7) cancel active stream
       const streamState = getActiveChatStreamState()
       if (streamState?.turnId) {
         void handleCancel()
@@ -3669,6 +4026,7 @@ function bindGlobalShortcuts(): void {
 
 async function init(): Promise<void> {
   renderShell()
+  bindAttachmentPreviewModal()
   bindGlobalShortcuts()
   const repositionThreadActionLayer = (): void => {
     if (!openThreadActionMenuId) return
@@ -3725,11 +4083,12 @@ async function init(): Promise<void> {
   })
 
   try {
-    const [agents, threads] = await Promise.all([
+    const [agents, threads, storageUsage] = await Promise.all([
       api.getAgents(),
       api.getThreads(),
+      api.getStorageUsage(),
     ])
-    store.set({ agents, threads })
+    store.set({ agents, threads, storageUsage })
   } catch {
     const el = document.getElementById('thread-list')
     if (el) {

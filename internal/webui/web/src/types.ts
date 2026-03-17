@@ -91,6 +91,7 @@ export interface Turn {
   turnId: string
   requestText: string
   responseText: string
+  attachments?: UploadedAsset[]
   status: 'running' | 'completed' | 'cancelled' | 'error'
   stopReason: string
   errorMessage: string
@@ -98,6 +99,23 @@ export interface Turn {
   completedAt: string
   isInternal: boolean
   events?: TurnEvent[]
+}
+
+export interface UploadedAsset {
+  uploadId: string
+  name: string
+  kind: 'file' | 'image'
+  mimeType: string
+  sizeBytes: number
+  deleted?: boolean
+}
+
+export interface StorageUsageInfo {
+  scope: string
+  maxBytes: number
+  usedBytes: number
+  usagePercent: number
+  policy: string
 }
 
 // ── Frontend message model ─────────────────────────────────────────────────
@@ -126,6 +144,7 @@ export interface Message {
   planEntries?: PlanEntry[]
   /** Populated when the agent emits tool_call/tool_call_update */
   toolCalls?: ToolCall[]
+  attachments?: UploadedAsset[]
 }
 
 // ── Permission ─────────────────────────────────────────────────────────────
@@ -175,6 +194,7 @@ export interface AppState {
   streamStates: Record<string, StreamState>
   /** Keyed by threadId; shown after a background turn finishes until revisited */
   threadCompletionBadges: Record<string, boolean>
+  storageUsage: StorageUsageInfo | null
 
   // — UI flags —
   settingsOpen: boolean

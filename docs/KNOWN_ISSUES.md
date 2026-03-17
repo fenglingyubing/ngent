@@ -15,6 +15,55 @@
 
 ## Open Issues
 
+- ID: KI-036
+- Title: Mobile sidebar drawer still lacks a dedicated tap-backdrop dismiss layer
+- Status: Open
+- Severity: Low
+- Affects: embedded Web UI on phones when the thread sidebar is opened from the hamburger button
+- Symptom:
+  - the chat surface is now mobile-optimized, but the sidebar drawer still reuses the existing aside element rather than a dedicated overlay/backdrop component.
+  - the drawer can be closed via the menu button, `Escape`, or by choosing a thread, but outside-tap dismissal is not yet implemented as a first-class mobile backdrop interaction.
+- Workaround:
+  - tap the menu button again, press `Escape` on devices with a keyboard, or select a thread to close the drawer.
+- Follow-up plan:
+  - add a real mobile backdrop layer with outside-tap dismissal once the sidebar shell is refactored beyond the current CSS-only drawer treatment.
+
+- ID: KI-029
+- Title: Attached chat assets are not downloadable or previewable yet
+- Status: Closed
+- Severity: Low
+- Affects: Web chat attachment flows after A3 turn binding
+- Symptom: historical issue where attached files/images appeared in message history before A4 introduced download, thumbnail, and preview support.
+- Workaround: none required after A4.
+- Follow-up plan: none.
+
+- ID: KI-030
+- Title: Thumbnail generation currently depends on Go stdlib image decoder coverage
+- Status: Open
+- Severity: Low
+- Affects: less common image formats accepted by MIME sniffing but not decodable by the current thumbnail generator
+- Symptom: uploads for images outside the built-in decoder set can fail while generating the thumbnail, because A4 intentionally uses the Go 1.24 standard library and persists PNG thumbnails.
+- Workaround: upload PNG/JPEG/GIF images for now, or treat unsupported formats as regular files until broader decoder coverage is added.
+- Follow-up plan: evaluate adding broader image decode support and optional EXIF stripping in a later asset phase.
+
+- ID: KI-032
+- Title: Image attachments use OCR text extraction, not full multimodal vision
+- Status: Open
+- Severity: Low
+- Affects: image-attachment turns that depend on layout/visual semantics rather than embedded text
+- Symptom: screenshots and document images with readable text can now influence the model through local OCR, but purely visual cues such as diagrams, colors, or spatial relationships may still be missed or summarized poorly.
+- Workaround: for image-heavy tasks, prefer screenshots/documents with legible text, or provide a short textual instruction describing what to inspect in the image.
+- Follow-up plan: evaluate native multimodal provider integration or richer OCR/layout extraction if image-understanding demand grows.
+
+- ID: KI-031
+- Title: Storage usage badge does not live-refresh after background quota cleanup
+- Status: Open
+- Severity: Low
+- Affects: Web UI storage badge when uploads are deleted or auto-cleaned from another client/session/process
+- Symptom: the chat-header storage indicator is fetched on page load and after local uploads, so it can remain stale until reload after periodic/startup quota cleanup or other external asset deletions.
+- Workaround: reload the page or trigger a fresh storage query after external asset changes.
+- Follow-up plan: refresh storage usage after local delete/cleanup actions and add polling or SSE notifications for auto-cleanup events.
+
 - ID: KI-001
 - Title: SSE disconnect during long-running turn
 - Status: Open
@@ -357,6 +406,20 @@
   - inspect the JSON block shown in the tool-call card; the full structured payload is still preserved in SSE/history.
 - Follow-up plan:
   - add richer renderers for additional ACP content block variants once real provider payloads stabilize.
+
+- ID: KI-035
+- Title: True image multimodal delivery currently exists only on the embedded Codex path
+- Status: Open
+- Severity: Low
+- Affects: image attachments sent to non-Codex agents (`claude`, `gemini`, `kimi`, `qwen`, `opencode`)
+- Symptom:
+  - Codex-backed turns now receive image attachments as structured prompt image blocks.
+  - other built-in agents still receive the existing text fallback, so they only see attachment metadata plus OCR/text preview injected by ngent.
+- Workaround:
+  - use the `codex` agent when you need guaranteed raw image attachment delivery today.
+  - for other agents, rely on OCR-friendly screenshots or include a text description with the attachment.
+- Follow-up plan:
+  - add provider-specific `ContentStreamer` implementations once each underlying transport is verified to accept image prompt blocks safely.
 
 ## Recently Closed
 

@@ -64,6 +64,37 @@
 - `data_json TEXT NOT NULL`
 - `created_at TEXT NOT NULL`
 
+### `uploads`
+
+- `upload_id TEXT PRIMARY KEY`
+- `client_id TEXT NOT NULL REFERENCES clients(client_id)`
+- `thread_id TEXT NOT NULL DEFAULT ''`
+- `turn_id TEXT NOT NULL DEFAULT ''`
+- `role TEXT NOT NULL`
+- `kind TEXT NOT NULL`
+- `status TEXT NOT NULL`
+- `origin_name TEXT NOT NULL`
+- `stored_name TEXT NOT NULL`
+- `mime_type TEXT NOT NULL`
+- `size_bytes INTEGER NOT NULL`
+- `storage_path TEXT NOT NULL`
+- `thumbnail_path TEXT NOT NULL DEFAULT ''`
+- `sha256 TEXT NOT NULL DEFAULT ''`
+- `created_at TEXT NOT NULL`
+- `last_accessed_at TEXT NOT NULL`
+- `deleted_at TEXT NOT NULL DEFAULT ''`
+
+### `storage_usage`
+
+- `scope TEXT PRIMARY KEY`
+- `used_bytes INTEGER NOT NULL`
+- `max_bytes INTEGER NOT NULL`
+- `updated_at TEXT NOT NULL`
+
+- default row:
+  - `scope='global'`
+  - `max_bytes=5368709120`
+
 ### `session_transcript_cache`
 
 - `agent_id TEXT NOT NULL`
@@ -84,6 +115,9 @@
 - `idx_threads_client_id` on `threads(client_id)`
 - `idx_turns_thread_id_created_at` on `turns(thread_id, created_at)`
 - `idx_events_turn_id_seq` unique index on `events(turn_id, seq)`
+- `idx_uploads_client_status_created_at` on `uploads(client_id, status, created_at)`
+- `idx_uploads_thread_created_at` on `uploads(thread_id, created_at)`
+- `idx_uploads_turn_id` on `uploads(turn_id)`
 - `session_transcript_cache` primary key on `(agent_id, cwd, session_id)`
 
 ## Storage API (M2)
@@ -103,8 +137,28 @@
 - `AppendEvent(turnID, type, dataJSON)`
 - `ListEventsByTurn(turnID)`
 - `FinalizeTurn(...)`
+- `CreateUpload(...)`
+- `GetUpload(uploadID)`
+- `ListUploadsByClient(clientID)`
+- `BindUploadsToTurn(...)`
+- `ListUploadsByTurn(turnID)`
+- `DeleteUpload(clientID, uploadID)`
+- `GetStorageUsage(scope)`
+- `AddStorageUsageBytes(scope, delta)`
+- `UpdateStorageUsageLimit(scope, maxBytes)`
+- `RecalculateStorageUsage(scope)`
+- `CleanupStorageUsageToLimit(scope, targetBytes)`
 
 ## Event Sequence Rule
 
 - `AppendEvent` computes `seq` as `max(seq)+1` per `turn_id` in a transaction.
 - Unique index on `(turn_id, seq)` enforces sequence uniqueness.
+
+## Chat Asset State Rules
+
+- `uploads.status` transitions:
+  - `uploaded` -> file exists on disk and is not yet bound to a turn.
+  - `attached` -> file is bound to one turn and may appear in history.
+  - `deleted` -> original file and thumbnail have been removed or are no longer addressable through the API.
+- `storage_usage.used_bytes` tracks the reconciled on-disk bytes of non-deleted upload originals plus thumbnails only.
+- automatic quota cleanup deletes uploads in `created_at ASC` order and then rewrites `used_bytes` through the same storage API used by manual deletion.

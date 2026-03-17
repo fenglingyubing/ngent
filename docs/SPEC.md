@@ -81,11 +81,17 @@ SQLite stores:
 - threads
 - turns
 - events (append-only stream records)
+- uploads
+- storage_usage
 
 Properties:
 
 - all outbound stream events are persisted before or atomically with emission strategy.
 - streamed auxiliary events such as `reasoning_delta`, `plan_update`, and `permission_required` share the same append-only event log as `message_delta`.
+- uploaded chat assets are persisted separately in `uploads`; a turn may bind zero or more attachment rows owned by the same client.
+- image uploads may also persist a server-generated thumbnail path for later UI preview/download flows.
+- `storage_usage.used_bytes` is the reconciled on-disk sum of non-deleted upload files plus thumbnail files under the chat asset root.
+- when reconciled usage exceeds `storage_usage.max_bytes`, ngent deletes the oldest non-deleted uploads first (`created_at ASC`), removing original + thumbnail files together and soft-marking the upload row as `deleted`.
 - each event has monotonic sequence per thread or turn.
 - thread deletion removes dependent rows in order (`events` -> `turns` -> `threads`) in one transaction.
 - restart can rebuild state from durable turn status plus event log.
@@ -107,9 +113,14 @@ On restart:
 - thread CRUD (create/list/get/update/delete)
 - turn create/cancel
 - thread compact (`POST /v1/threads/{threadId}/compact`)
+- asset upload (`POST /v1/uploads`)
+- upload delete (`DELETE /v1/uploads/{uploadId}`)
+- storage usage (`GET /v1/storage`)
+- attachment download (`GET /v1/attachments/{uploadId}`)
+- attachment thumbnail (`GET /v1/attachments/{uploadId}/thumbnail`)
 - SSE stream for real-time events
 - permission decision endpoint
-- turn history with optional persisted event replay (`message_delta`, `reasoning_delta`, `plan_update`, terminal/error events)
+- turn history with optional persisted event replay (`message_delta`, `reasoning_delta`, `plan_update`, terminal/error events) plus attachment summaries
 
 See `docs/API.md` for endpoint and schema contracts.
 
@@ -124,6 +135,13 @@ See `docs/API.md` for endpoint and schema contracts.
 - logs are JSON on stderr and redact sensitive data.
 - `--debug=true` raises log verbosity to debug level and emits sanitized ACP JSON-RPC request/response traces on stderr.
 - HTTP payloads contain protocol data only.
+- attachment and thumbnail endpoints remain behind the same bearer-token + `X-Client-ID` checks as the rest of `/v1/*`; the Web UI therefore loads previews/downloads via authenticated blob fetches instead of unauthenticated static URLs.
+- on startup, ngent reconciles chat-asset usage against the files present on disk so quota UI and cleanup decisions start from real asset bytes instead of stale counters.
+- quota enforcement is best-effort automatic cleanup:
+  - before accepting a new upload, ngent may delete the oldest existing chat assets to make room.
+  - after writing a new upload + thumbnail, ngent rechecks quota and may delete older assets again before finalizing the metadata write.
+  - startup and a background janitor loop also trim oldest assets if usage drifts above quota.
+  - if no deletable assets remain and usage still exceeds quota, upload fails with `QUOTA_EXCEEDED`.
 
 ## 10A. Shared ACP CLI Driver
 
@@ -617,3 +635,59 @@ and upstream ACP schema:
   - path/location lists
   - raw JSON input/output blocks
 - Unsupported non-text ACP tool-call payload shapes are still shown via generic JSON fallback so the information is visible even when no richer renderer exists yet.
+
+## 19. Multimodal Image Attachments for Codex Turns (2026-03-17)
+
+### 19.1 Agent-Layer Contract
+
+- `agents.Streamer` remains the baseline plain-text turn contract.
+- agents may additionally implement `agents.ContentStreamer` to accept structured prompt content blocks.
+- ngent currently uses two content block kinds:
+  - `text`
+  - `image`
+
+### 19.2 Turn Prompt Assembly
+
+- HTTP turn creation still binds uploads before execution and still computes the same injected text context:
+  - conversation summary
+  - recent visible turns
+  - current user input
+  - attachment metadata
+  - text-file previews
+  - OCR previews when available
+- if the selected agent implements `ContentStreamer` and the bound uploads include at least one image:
+  - ngent sends the injected text context as the first `text` block
+  - ngent appends one `image` block per bound image attachment
+  - image blocks preserve the persisted local `storagePath`, original filename, and `mimeType`
+- otherwise ngent falls back to the existing plain-text `Stream()` path unchanged.
+
+### 19.3 Current Support Matrix
+
+- embedded `codex` implements `ContentStreamer` and therefore receives true multimodal image attachments.
+- other built-in agents currently remain on the plain-text fallback path until their structured image transport support is implemented.
+
+## 20. Mobile Web UI Layout Tier (2026-03-17)
+
+### 20.1 Scope
+
+- the embedded SPA keeps the same DOM structure for desktop and mobile; mobile optimization is implemented as CSS breakpoint behavior rather than alternate templates.
+- the primary mobile breakpoint begins at `max-width: 768px`, with an extra narrow-phone refinement tier at `max-width: 480px`.
+
+### 20.2 Mobile Layout Rules
+
+- the app shell uses `100dvh` plus safe-area inset padding so the header, drawer, composer, and bottom-sheet-style modals stay clear of browser UI and device cutouts.
+- on mobile chat screens:
+  - the header may wrap into two rows
+  - storage usage remains visible beneath the title instead of being dropped
+  - the message list uses tighter padding than desktop
+  - the empty state is vertically compressed to preserve composer visibility
+- the composer becomes touch-first on mobile:
+  - textarea first
+  - model/reasoning pickers in a compact row or stacked column on very narrow devices
+  - upload/send actions in a full-width bottom action row
+- mobile modals align to the viewport bottom with larger radii and safe-area-aware footer padding.
+
+### 20.3 Non-Goals
+
+- the current mobile optimization does not introduce a separate JavaScript drawer/backdrop system for the sidebar.
+- desktop layout behavior and streaming/chat protocol semantics remain unchanged.

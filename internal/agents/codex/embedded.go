@@ -86,6 +86,7 @@ type Client struct {
 }
 
 var _ agents.Streamer = (*Client)(nil)
+var _ agents.ContentStreamer = (*Client)(nil)
 var _ agents.ConfigOptionManager = (*Client)(nil)
 var _ agents.SessionLister = (*Client)(nil)
 var _ agents.SlashCommandsProvider = (*Client)(nil)
@@ -371,6 +372,44 @@ func (c *Client) Close() error {
 
 // Stream sends one prompt to embedded runtime and emits deltas.
 func (c *Client) Stream(ctx context.Context, input string, onDelta func(delta string) error) (agents.StopReason, error) {
+	return c.streamPrompt(ctx, onDelta, func(sessionID string) map[string]any {
+		return map[string]any{
+			"sessionId": sessionID,
+			"prompt":    input,
+		}
+	})
+}
+
+// StreamContent sends one structured prompt to embedded runtime and emits deltas.
+func (c *Client) StreamContent(
+	ctx context.Context,
+	content []agents.PromptContentBlock,
+	onDelta func(delta string) error,
+) (agents.StopReason, error) {
+	wireBlocks := make([]map[string]any, 0, len(content))
+	for _, block := range content {
+		wire, ok := promptContentBlockToWire(block)
+		if !ok {
+			continue
+		}
+		wireBlocks = append(wireBlocks, wire)
+	}
+	if len(wireBlocks) == 0 {
+		return c.Stream(ctx, "", onDelta)
+	}
+	return c.streamPrompt(ctx, onDelta, func(sessionID string) map[string]any {
+		return map[string]any{
+			"sessionId": sessionID,
+			"content":   wireBlocks,
+		}
+	})
+}
+
+func (c *Client) streamPrompt(
+	ctx context.Context,
+	onDelta func(delta string) error,
+	promptParams func(sessionID string) map[string]any,
+) (agents.StopReason, error) {
 	if c == nil {
 		return agents.StopReasonEndTurn, errors.New("codex: nil client")
 	}
@@ -402,7 +441,7 @@ func (c *Client) Stream(ctx context.Context, input string, onDelta func(delta st
 			}
 		}
 
-		stopReason, streamErr := c.streamOnce(ctx, runtime, sessionID, input, onDelta)
+		stopReason, streamErr := c.streamOnce(ctx, runtime, promptParams(sessionID), onDelta)
 		if streamErr == nil {
 			if c.supportsLoadSession() && requestedSessionID == "" {
 				resolvedSessionID := c.resolveStableSessionIDAfterPrompt(ctx, runtime, sessionID, stableSessionID)
@@ -428,10 +467,11 @@ func (c *Client) Stream(ctx context.Context, input string, onDelta func(delta st
 func (c *Client) streamOnce(
 	ctx context.Context,
 	runtime *codexacp.EmbeddedRuntime,
-	sessionID string,
-	input string,
+	promptParams map[string]any,
 	onDelta func(delta string) error,
 ) (agents.StopReason, error) {
+	sessionID, _ := promptParams["sessionId"].(string)
+	sessionID = strings.TrimSpace(sessionID)
 	updates, unsubscribe := runtime.SubscribeUpdates(256)
 	defer unsubscribe()
 
@@ -461,10 +501,7 @@ func (c *Client) streamOnce(
 	}
 	promptDone := make(chan promptResult, 1)
 	go func() {
-		resp, reqErr := c.clientRequest(promptCtx, runtime, methodSessionPrompt, map[string]any{
-			"sessionId": sessionID,
-			"prompt":    input,
-		})
+		resp, reqErr := c.clientRequest(promptCtx, runtime, methodSessionPrompt, promptParams)
 		promptDone <- promptResult{response: resp, err: reqErr}
 	}()
 
@@ -565,6 +602,52 @@ func (c *Client) streamOnce(
 				return finalStopReason, nil
 			}
 		}
+	}
+}
+
+func promptContentBlockToWire(block agents.PromptContentBlock) (map[string]any, bool) {
+	blockType := strings.TrimSpace(block.Type)
+	switch blockType {
+	case agents.PromptContentTypeText:
+		text := strings.TrimSpace(block.Text)
+		if text == "" {
+			return nil, false
+		}
+		return map[string]any{
+			"type": "text",
+			"text": text,
+		}, true
+	case agents.PromptContentTypeImage:
+		wire := map[string]any{
+			"type": "image",
+		}
+		if path := strings.TrimSpace(block.Path); path != "" {
+			wire["path"] = path
+		}
+		if data := strings.TrimSpace(block.Data); data != "" {
+			wire["data"] = data
+		}
+		if uri := strings.TrimSpace(block.URI); uri != "" {
+			wire["uri"] = uri
+		}
+		if name := strings.TrimSpace(block.Name); name != "" {
+			wire["name"] = name
+		}
+		if mimeType := strings.TrimSpace(block.MIMEType); mimeType != "" {
+			wire["mimeType"] = mimeType
+		}
+		if _, ok := wire["path"]; ok {
+			return wire, true
+		}
+		if _, ok := wire["data"]; ok {
+			return wire, true
+		}
+		if _, ok := wire["uri"]; ok {
+			return wire, true
+		}
+		return nil, false
+	default:
+		return nil, false
 	}
 }
 

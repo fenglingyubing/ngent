@@ -77,6 +77,7 @@ class AppStore {
       messages: {},
       streamStates: {},
       threadCompletionBadges: {},
+      storageUsage: null,
 
       // UI flags
       settingsOpen: false,

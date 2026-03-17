@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -43,6 +44,387 @@ func TestMigrateIdempotent(t *testing.T) {
 	countSecond := countRows(t, store2.db, "schema_migrations")
 	if got, want := countSecond, len(migrations); got != want {
 		t.Fatalf("schema_migrations rows after reopen = %d, want %d", got, want)
+	}
+}
+
+func TestDefaultAssetsDirAndEnsureAssetsDir(t *testing.T) {
+	dir, err := DefaultAssetsDir()
+	if err != nil {
+		t.Fatalf("DefaultAssetsDir(): %v", err)
+	}
+	if dir == "" {
+		t.Fatal("DefaultAssetsDir() returned empty path")
+	}
+
+	target := filepath.Join(t.TempDir(), "assets-root")
+	if err := EnsureAssetsDir(target); err != nil {
+		t.Fatalf("EnsureAssetsDir(): %v", err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("Stat(assets-root): %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("assets path is not a directory")
+	}
+}
+
+func TestDefaultStorageUsageInitialized(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	defer func() {
+		_ = store.Close()
+	}()
+
+	usage, err := store.GetStorageUsage(ctx, GlobalStorageUsageScope)
+	if err != nil {
+		t.Fatalf("GetStorageUsage(global): %v", err)
+	}
+	if got, want := usage.MaxBytes, DefaultChatAssetQuotaBytes; got != want {
+		t.Fatalf("usage.MaxBytes = %d, want %d", got, want)
+	}
+	if usage.UsedBytes != 0 {
+		t.Fatalf("usage.UsedBytes = %d, want 0", usage.UsedBytes)
+	}
+}
+
+func TestCreateAndGetUpload(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	defer func() {
+		_ = store.Close()
+	}()
+
+	base := time.Date(2026, 3, 17, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return base }
+
+	created, err := store.CreateUpload(ctx, CreateUploadParams{
+		UploadID:      "up-1",
+		ClientID:      "client-upload",
+		ThreadID:      "th-1",
+		TurnID:        "",
+		Role:          "user",
+		Kind:          "image",
+		Status:        "uploaded",
+		OriginName:    "image.png",
+		StoredName:    "up-1.png",
+		MIMEType:      "image/png",
+		SizeBytes:     1234,
+		StoragePath:   "/tmp/assets/up-1.png",
+		ThumbnailPath: "/tmp/assets/up-1.thumb.webp",
+		SHA256:        "abc",
+	})
+	if err != nil {
+		t.Fatalf("CreateUpload(): %v", err)
+	}
+	if created.UploadID != "up-1" {
+		t.Fatalf("created.UploadID = %q, want up-1", created.UploadID)
+	}
+
+	got, err := store.GetUpload(ctx, "up-1")
+	if err != nil {
+		t.Fatalf("GetUpload(up-1): %v", err)
+	}
+	if got.OriginName != "image.png" {
+		t.Fatalf("got.OriginName = %q, want image.png", got.OriginName)
+	}
+	if got.SizeBytes != 1234 {
+		t.Fatalf("got.SizeBytes = %d, want 1234", got.SizeBytes)
+	}
+	if got.DeletedAt != nil {
+		t.Fatalf("got.DeletedAt = %v, want nil", got.DeletedAt)
+	}
+}
+
+func TestBindUploadsToTurnAndListByTurn(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	defer func() {
+		_ = store.Close()
+	}()
+
+	store.now = func() time.Time { return time.Date(2026, 3, 17, 12, 30, 0, 0, time.UTC) }
+
+	for _, uploadID := range []string{"up-1", "up-2"} {
+		if _, err := store.CreateUpload(ctx, CreateUploadParams{
+			UploadID:    uploadID,
+			ClientID:    "client-a",
+			Role:        "user",
+			Kind:        "file",
+			Status:      "uploaded",
+			OriginName:  uploadID + ".txt",
+			StoredName:  uploadID + ".txt",
+			MIMEType:    "text/plain",
+			SizeBytes:   64,
+			StoragePath: "/tmp/" + uploadID + ".txt",
+		}); err != nil {
+			t.Fatalf("CreateUpload(%s): %v", uploadID, err)
+		}
+	}
+
+	bound, err := store.BindUploadsToTurn(ctx, BindUploadsToTurnParams{
+		ClientID:  "client-a",
+		ThreadID:  "th-1",
+		TurnID:    "turn-1",
+		Role:      "user",
+		UploadIDs: []string{"up-1", "up-2"},
+	})
+	if err != nil {
+		t.Fatalf("BindUploadsToTurn(): %v", err)
+	}
+	if got, want := len(bound), 2; got != want {
+		t.Fatalf("len(bound) = %d, want %d", got, want)
+	}
+	if bound[0].Status != "attached" || bound[0].TurnID != "turn-1" {
+		t.Fatalf("bound[0] = %#v, want attached to turn-1", bound[0])
+	}
+
+	uploads, err := store.ListUploadsByTurn(ctx, "turn-1")
+	if err != nil {
+		t.Fatalf("ListUploadsByTurn(): %v", err)
+	}
+	if got, want := len(uploads), 2; got != want {
+		t.Fatalf("len(uploads) = %d, want %d", got, want)
+	}
+	if uploads[1].ThreadID != "th-1" {
+		t.Fatalf("uploads[1].ThreadID = %q, want th-1", uploads[1].ThreadID)
+	}
+}
+
+func TestBindUploadsToTurnRejectsReuse(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	defer func() {
+		_ = store.Close()
+	}()
+
+	if _, err := store.CreateUpload(ctx, CreateUploadParams{
+		UploadID:    "up-1",
+		ClientID:    "client-a",
+		Role:        "user",
+		Kind:        "file",
+		Status:      "uploaded",
+		OriginName:  "doc.txt",
+		StoredName:  "up-1.txt",
+		MIMEType:    "text/plain",
+		SizeBytes:   64,
+		StoragePath: "/tmp/up-1.txt",
+	}); err != nil {
+		t.Fatalf("CreateUpload(): %v", err)
+	}
+
+	if _, err := store.BindUploadsToTurn(ctx, BindUploadsToTurnParams{
+		ClientID:  "client-a",
+		ThreadID:  "th-1",
+		TurnID:    "turn-1",
+		Role:      "user",
+		UploadIDs: []string{"up-1"},
+	}); err != nil {
+		t.Fatalf("first BindUploadsToTurn(): %v", err)
+	}
+
+	_, err := store.BindUploadsToTurn(ctx, BindUploadsToTurnParams{
+		ClientID:  "client-a",
+		ThreadID:  "th-2",
+		TurnID:    "turn-2",
+		Role:      "user",
+		UploadIDs: []string{"up-1"},
+	})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("second BindUploadsToTurn() error = %v, want ErrConflict", err)
+	}
+}
+
+func TestRecalculateStorageUsageMatchesDisk(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	defer func() {
+		_ = store.Close()
+	}()
+
+	root := t.TempDir()
+	originalPath := filepath.Join(root, "up-1.png")
+	thumbnailPath := filepath.Join(root, "up-1.thumb.png")
+	if err := os.WriteFile(originalPath, []byte("original-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile(original): %v", err)
+	}
+	if err := os.WriteFile(thumbnailPath, []byte("thumb"), 0o644); err != nil {
+		t.Fatalf("WriteFile(thumbnail): %v", err)
+	}
+
+	if _, err := store.CreateUpload(ctx, CreateUploadParams{
+		UploadID:      "up-1",
+		ClientID:      "client-a",
+		Role:          "user",
+		Kind:          "image",
+		Status:        "uploaded",
+		OriginName:    "image.png",
+		StoredName:    "up-1.png",
+		MIMEType:      "image/png",
+		SizeBytes:     1,
+		StoragePath:   originalPath,
+		ThumbnailPath: thumbnailPath,
+	}); err != nil {
+		t.Fatalf("CreateUpload(): %v", err)
+	}
+	if err := store.AddStorageUsageBytes(ctx, GlobalStorageUsageScope, 1); err != nil {
+		t.Fatalf("AddStorageUsageBytes(): %v", err)
+	}
+
+	usage, err := store.RecalculateStorageUsage(ctx, GlobalStorageUsageScope)
+	if err != nil {
+		t.Fatalf("RecalculateStorageUsage(): %v", err)
+	}
+	wantBytes := int64(len("original-bytes") + len("thumb"))
+	if usage.UsedBytes != wantBytes {
+		t.Fatalf("usage.UsedBytes = %d, want %d", usage.UsedBytes, wantBytes)
+	}
+}
+
+func TestDeleteUploadRemovesFilesAndUsage(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	defer func() {
+		_ = store.Close()
+	}()
+
+	root := t.TempDir()
+	originalPath := filepath.Join(root, "up-1.txt")
+	thumbnailPath := filepath.Join(root, "up-1.thumb.png")
+	if err := os.WriteFile(originalPath, []byte("payload"), 0o644); err != nil {
+		t.Fatalf("WriteFile(original): %v", err)
+	}
+	if err := os.WriteFile(thumbnailPath, []byte("thumb"), 0o644); err != nil {
+		t.Fatalf("WriteFile(thumbnail): %v", err)
+	}
+	totalBytes := int64(len("payload") + len("thumb"))
+
+	if _, err := store.CreateUpload(ctx, CreateUploadParams{
+		UploadID:      "up-1",
+		ClientID:      "client-a",
+		Role:          "user",
+		Kind:          "image",
+		Status:        "uploaded",
+		OriginName:    "image.txt",
+		StoredName:    "up-1.txt",
+		MIMEType:      "text/plain",
+		SizeBytes:     int64(len("payload")),
+		StoragePath:   originalPath,
+		ThumbnailPath: thumbnailPath,
+	}); err != nil {
+		t.Fatalf("CreateUpload(): %v", err)
+	}
+	if err := store.AddStorageUsageBytes(ctx, GlobalStorageUsageScope, totalBytes); err != nil {
+		t.Fatalf("AddStorageUsageBytes(): %v", err)
+	}
+
+	result, err := store.DeleteUpload(ctx, "client-a", "up-1")
+	if err != nil {
+		t.Fatalf("DeleteUpload(): %v", err)
+	}
+	if result.RemovedBytes != totalBytes {
+		t.Fatalf("result.RemovedBytes = %d, want %d", result.RemovedBytes, totalBytes)
+	}
+	if _, err := os.Stat(originalPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("original path still exists: %v", err)
+	}
+	if _, err := os.Stat(thumbnailPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("thumbnail path still exists: %v", err)
+	}
+
+	usage, err := store.GetStorageUsage(ctx, GlobalStorageUsageScope)
+	if err != nil {
+		t.Fatalf("GetStorageUsage(): %v", err)
+	}
+	if usage.UsedBytes != 0 {
+		t.Fatalf("usage.UsedBytes = %d, want 0", usage.UsedBytes)
+	}
+
+	upload, err := store.GetUpload(ctx, "up-1")
+	if err != nil {
+		t.Fatalf("GetUpload(): %v", err)
+	}
+	if upload.Status != "deleted" || upload.DeletedAt == nil {
+		t.Fatalf("upload after delete = %#v, want deleted with deleted_at", upload)
+	}
+}
+
+func TestCleanupStorageUsageToLimitDeletesOldestUploads(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	defer func() {
+		_ = store.Close()
+	}()
+
+	root := t.TempDir()
+	base := time.Date(2026, 3, 17, 10, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return base }
+
+	createUpload := func(id string, now time.Time, content string) {
+		t.Helper()
+		store.now = func() time.Time { return now }
+		path := filepath.Join(root, id+".txt")
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", id, err)
+		}
+		if _, err := store.CreateUpload(ctx, CreateUploadParams{
+			UploadID:    id,
+			ClientID:    "client-a",
+			Role:        "user",
+			Kind:        "file",
+			Status:      "uploaded",
+			OriginName:  id + ".txt",
+			StoredName:  id + ".txt",
+			MIMEType:    "text/plain",
+			SizeBytes:   int64(len(content)),
+			StoragePath: path,
+		}); err != nil {
+			t.Fatalf("CreateUpload(%s): %v", id, err)
+		}
+	}
+
+	createUpload("up-1", base.Add(1*time.Minute), "11111")
+	createUpload("up-2", base.Add(2*time.Minute), "22222")
+	createUpload("up-3", base.Add(3*time.Minute), "33333")
+	store.now = func() time.Time { return base.Add(4 * time.Minute) }
+	if _, err := store.RecalculateStorageUsage(ctx, GlobalStorageUsageScope); err != nil {
+		t.Fatalf("RecalculateStorageUsage(): %v", err)
+	}
+
+	result, err := store.CleanupStorageUsageToLimit(ctx, GlobalStorageUsageScope, 10)
+	if err != nil {
+		t.Fatalf("CleanupStorageUsageToLimit(): %v", err)
+	}
+	if got, want := result.DeletedUploads, 1; got != want {
+		t.Fatalf("DeletedUploads = %d, want %d", got, want)
+	}
+	if result.Deleted[0].Upload.UploadID != "up-1" {
+		t.Fatalf("first deleted upload = %q, want up-1", result.Deleted[0].Upload.UploadID)
+	}
+	if result.Usage.UsedBytes != 10 {
+		t.Fatalf("usage after cleanup = %d, want 10", result.Usage.UsedBytes)
+	}
+	if _, err := os.Stat(filepath.Join(root, "up-1.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("oldest upload file still exists: %v", err)
+	}
+}
+
+func TestCleanupStorageUsageToLimitReturnsQuotaExceededWhenNothingToDelete(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	defer func() {
+		_ = store.Close()
+	}()
+
+	if err := store.AddStorageUsageBytes(ctx, GlobalStorageUsageScope, 10); err != nil {
+		t.Fatalf("AddStorageUsageBytes(): %v", err)
+	}
+	result, err := store.CleanupStorageUsageToLimit(ctx, GlobalStorageUsageScope, 0)
+	if !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("CleanupStorageUsageToLimit() error = %v, want ErrQuotaExceeded", err)
+	}
+	if result.DeletedUploads != 0 {
+		t.Fatalf("DeletedUploads = %d, want 0", result.DeletedUploads)
 	}
 }
 

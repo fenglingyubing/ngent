@@ -2,6 +2,8 @@ package codex_test
 
 import (
 	"context"
+	"encoding/base64"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -139,6 +141,52 @@ func TestStreamCapturesReasoningTextDeltas(t *testing.T) {
 
 	if got, want := reasoning.String(), "Raw reasoning step 1. Raw reasoning step 2."; got != want {
 		t.Fatalf("reasoning = %q, want %q", got, want)
+	}
+}
+
+func TestStreamContentPassesImageBlocksToEmbeddedRuntime(t *testing.T) {
+	client := newFakeCodexClient(t)
+	defer func() {
+		_ = client.Close()
+	}()
+
+	const tinyPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5W9tQAAAAASUVORK5CYII="
+	imageBytes, err := base64.StdEncoding.DecodeString(tinyPNGBase64)
+	if err != nil {
+		t.Fatalf("decode tiny png: %v", err)
+	}
+	imagePath := filepath.Join(t.TempDir(), "tiny.png")
+	if err := os.WriteFile(imagePath, imageBytes, 0o600); err != nil {
+		t.Fatalf("write tiny png: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	var answer strings.Builder
+	stopReason, err := client.StreamContent(ctx, []agents.PromptContentBlock{
+		{
+			Type: agents.PromptContentTypeText,
+			Text: "describe the image briefly",
+		},
+		{
+			Type:     agents.PromptContentTypeImage,
+			Path:     imagePath,
+			Name:     "tiny.png",
+			MIMEType: "image/png",
+		},
+	}, func(delta string) error {
+		answer.WriteString(delta)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamContent(): %v", err)
+	}
+	if stopReason != agents.StopReasonEndTurn {
+		t.Fatalf("StopReason = %q, want %q", stopReason, agents.StopReasonEndTurn)
+	}
+	if got := answer.String(); !strings.Contains(got, "image context received") {
+		t.Fatalf("answer = %q, want image-aware output", got)
 	}
 }
 

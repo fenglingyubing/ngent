@@ -1,5 +1,5 @@
 import { store } from './store.ts'
-import type { AgentInfo, ConfigOption, ModelOption, SessionInfo, SessionTranscriptMessage, SlashCommand, Thread, Turn } from './types.ts'
+import type { AgentInfo, ConfigOption, ModelOption, SessionInfo, SessionTranscriptMessage, SlashCommand, StorageUsageInfo, Thread, Turn, UploadedAsset } from './types.ts'
 import { TurnStream } from './sse.ts'
 import type { TurnStreamCallbacks } from './sse.ts'
 
@@ -59,6 +59,14 @@ interface ThreadSlashCommandsResponse {
 }
 interface CancelTurnResponse    { turnId: string; threadId: string; status: string }
 interface DeleteThreadResponse  { threadId: string; status: string }
+interface UploadsResponse       { uploads: UploadedAsset[] }
+interface StorageUsageResponse  extends StorageUsageInfo {}
+
+export interface AttachmentBlobResult {
+  blob: Blob
+  fileName: string
+  contentType: string
+}
 
 // ── Client ─────────────────────────────────────────────────────────────────
 
@@ -75,6 +83,37 @@ class ApiClient {
     }
     if (authToken) h['Authorization'] = `Bearer ${authToken}`
     return h
+  }
+
+  private multipartHeaders(): Record<string, string> {
+    const { clientId, authToken } = store.get()
+    const h: Record<string, string> = {
+      'X-Client-ID': clientId,
+    }
+    if (authToken) h['Authorization'] = `Bearer ${authToken}`
+    return h
+  }
+
+  private parseContentDispositionFilename(header: string | null, fallback: string): string {
+    const raw = header?.trim() ?? ''
+    if (!raw) return fallback
+
+    const utf8Match = raw.match(/filename\*\s*=\s*UTF-8''([^;]+)/i)
+    if (utf8Match?.[1]) {
+      try {
+        return decodeURIComponent(utf8Match[1])
+      } catch {
+        return fallback
+      }
+    }
+
+    const quotedMatch = raw.match(/filename\s*=\s*"([^"]+)"/i)
+    if (quotedMatch?.[1]) return quotedMatch[1]
+
+    const plainMatch = raw.match(/filename\s*=\s*([^;]+)/i)
+    if (plainMatch?.[1]) return plainMatch[1].trim()
+
+    return fallback
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -223,13 +262,97 @@ class ApiClient {
     await this.request<DeleteThreadResponse>('DELETE', `/v1/threads/${encodeURIComponent(threadId)}`)
   }
 
+  /** GET /v1/storage */
+  async getStorageUsage(): Promise<StorageUsageInfo> {
+    return this.request<StorageUsageResponse>('GET', '/v1/storage')
+  }
+
+  /** POST /v1/uploads */
+  async uploadFiles(files: File[]): Promise<UploadedAsset[]> {
+    const form = new FormData()
+    for (const file of files) form.append('files', file, file.name)
+
+    let res: Response
+    try {
+      res = await fetch(this.url('/v1/uploads'), {
+        method: 'POST',
+        headers: this.multipartHeaders(),
+        body: form,
+      })
+    } catch (err) {
+      throw new ApiError(`网络错误：${String(err)}`, 'NETWORK_ERROR', 0)
+    }
+
+    if (!res.ok) {
+      let code = 'INTERNAL'
+      let message = `HTTP ${res.status}`
+      let details: Record<string, unknown> | undefined
+      try {
+        const payload = (await res.json()) as {
+          error?: { code?: string; message?: string; details?: Record<string, unknown> }
+        }
+        if (payload.error) {
+          code = payload.error.code ?? code
+          message = payload.error.message ?? message
+          details = payload.error.details
+        }
+      } catch { /* ignore */ }
+      throw new ApiError(message, code, res.status, details)
+    }
+
+    const data = await res.json() as UploadsResponse
+    return data.uploads ?? []
+  }
+
+  fetchAttachmentBlob(uploadId: string, thumbnail = false): Promise<AttachmentBlobResult> {
+    const path = thumbnail
+      ? `/v1/attachments/${encodeURIComponent(uploadId)}/thumbnail`
+      : `/v1/attachments/${encodeURIComponent(uploadId)}`
+
+    return fetch(this.url(path), {
+      method: 'GET',
+      headers: this.multipartHeaders(),
+    }).then(async res => {
+      if (!res.ok) {
+        let code = 'INTERNAL'
+        let message = `HTTP ${res.status}`
+        let details: Record<string, unknown> | undefined
+        try {
+          const payload = (await res.json()) as {
+            error?: { code?: string; message?: string; details?: Record<string, unknown> }
+          }
+          if (payload.error) {
+            code = payload.error.code ?? code
+            message = payload.error.message ?? message
+            details = payload.error.details
+          }
+        } catch { /* ignore */ }
+        throw new ApiError(message, code, res.status, details)
+      }
+
+      const blob = await res.blob()
+      const fileName = this.parseContentDispositionFilename(
+        res.headers.get('Content-Disposition'),
+        uploadId,
+      )
+      return {
+        blob,
+        fileName,
+        contentType: res.headers.get('Content-Type') || blob.type || 'application/octet-stream',
+      }
+    }).catch(err => {
+      if (err instanceof ApiError) throw err
+      throw new ApiError(`网络错误：${String(err)}`, 'NETWORK_ERROR', 0)
+    })
+  }
+
   /**
    * POST /v1/threads/{threadId}/turns — opens an SSE stream.
    * Starts the stream immediately and returns the TurnStream handle.
    */
-  startTurn(threadId: string, input: string, callbacks: TurnStreamCallbacks): TurnStream {
+  startTurn(threadId: string, input: string, attachments: string[], callbacks: TurnStreamCallbacks): TurnStream {
     const url = this.url(`/v1/threads/${encodeURIComponent(threadId)}/turns`)
-    const stream = new TurnStream(url, this.headers(), { input, stream: true }, callbacks)
+    const stream = new TurnStream(url, this.headers(), { input, stream: true, attachments }, callbacks)
     void stream.start()
     return stream
   }

@@ -109,6 +109,58 @@ This checklist defines executable acceptance checks for requirements 1-16.
   - `cd internal/webui/web && npm run build`
   - manual: `make run` → open `http://127.0.0.1:8686/` or scan the startup QR code from another device, confirm live `思考中` stays expanded while streaming, finalized reasoning label changes to `思考过程`, markdown inside expanded `思考过程` renders correctly, and the section collapses after the turn completes
 
+## Requirement 13A: Web Chat Turn Attachments
+
+- Operation: upload one image and one regular file, send them with and without text, then reload history.
+- Expected:
+  - `POST /v1/threads/{threadId}/turns` accepts `attachments` and allows attachment-only turns.
+  - `GET /v1/threads/{threadId}/history` returns attachment summaries on the bound turn.
+  - the Web UI renders persisted user attachment cards and differentiates image vs file styling.
+  - reusing an already attached upload on another thread returns `409 CONFLICT`.
+- Verification command:
+  - `go test ./internal/httpapi -run 'TestTurnsBindAttachmentsAndHistoryIncludesSummaries|TestTurnsRejectReusedAttachmentAcrossThreads' -count=1`
+  - `go test ./internal/storage -run 'TestBindUploadsToTurnAndListByTurn|TestBindUploadsToTurnRejectsReuse' -count=1`
+  - `cd internal/webui/web && npm run build`
+
+## Requirement 13B: Web Chat Attachment Download And Preview
+
+- Operation: upload one image and one regular file, fetch the thumbnail and original attachment endpoints, then verify the Web UI build still succeeds with preview/download controls.
+- Expected:
+  - `GET /v1/attachments/{uploadId}/thumbnail` returns an image thumbnail for uploaded images.
+  - `GET /v1/attachments/{uploadId}` returns the original file with a safe `Content-Disposition`.
+  - deleted attachments return `404 NOT_FOUND`.
+  - the Web UI can render thumbnail-backed image cards, open a full-size preview, and download regular files through authenticated blob fetches.
+- Verification command:
+  - `go test ./internal/httpapi -run 'TestAttachmentDownloadAndThumbnailEndpoints|TestAttachmentDeletedReturnsNotFound' -count=1`
+  - `cd internal/webui/web && npm run build`
+
+## Requirement 13C: Web Chat Storage Usage Visibility
+
+- Operation: read the storage endpoint, upload a file, delete it again, then confirm startup/disk reconciliation and the Web UI storage badge build path.
+- Expected:
+  - `GET /v1/storage` returns `scope`, `usedBytes`, `maxBytes`, `usagePercent`, and `policy`.
+  - upload increases `usedBytes`, and deleting the same upload reduces `usedBytes`.
+  - startup/disk reconciliation rewrites usage to match real upload + thumbnail files on disk.
+  - the Web UI can render a storage usage badge with warning thresholds above `80%` and `95%`.
+- Verification command:
+  - `go test ./internal/httpapi -run TestStorageUsageReflectsUploadAndDelete -count=1`
+  - `go test ./internal/storage -run 'TestRecalculateStorageUsageMatchesDisk|TestDeleteUploadRemovesFilesAndUsage' -count=1`
+  - `cd internal/webui/web && npm run build`
+
+## Requirement 13D: Web Chat Automatic Quota Cleanup
+
+- Operation: force storage usage above the configured limit, upload another file, and verify startup/runtime cleanup removes the oldest chat assets first.
+- Expected:
+  - uploads attempt pre-write cleanup and post-write cleanup before returning `QUOTA_EXCEEDED`.
+  - startup reconciliation also trims oldest assets when the reconciled usage already exceeds `maxBytes`.
+  - auto-cleaned attachments are soft-deleted in `uploads`, removed from disk, and no longer downloadable.
+  - when no deletable assets remain, upload returns `409 QUOTA_EXCEEDED`.
+- Verification command:
+  - `go test ./internal/storage -run 'TestCleanupStorageUsageToLimitDeletesOldestUploads|TestCleanupStorageUsageToLimitReturnsQuotaExceededWhenNothingToDelete' -count=1`
+  - `go test ./internal/httpapi -run 'TestV1UploadsAutoCleanupOldestAssetsBeforeWrite|TestV1UploadsReturnQuotaExceededWhenCleanupCannotFreeEnough' -count=1`
+  - `go test ./cmd/ngent -count=1`
+  - `cd internal/webui/web && npm run build`
+
 ## Global Gate
 
 - Operation: run repository checks.
@@ -422,3 +474,35 @@ This checklist defines executable acceptance checks for requirements 1-16.
   - `go test ./internal/httpapi -run 'TestTurnsSSEIncludesToolCallUpdatesAndPersistsHistory' -count=1`
   - `cd internal/webui/web && npm run build`
   - `go test ./...`
+
+## Requirement 26: Codex Image Attachments Use Structured Multimodal Prompt Blocks
+
+- Operation:
+  - create a thread using the `codex` agent.
+  - upload an image attachment and start a turn with that attachment bound.
+  - verify the server behavior both with a multimodal-capable agent and with a plain-text-only fallback agent stub.
+- Expected:
+  - when the agent implements `ContentStreamer`, ngent sends:
+    - one text block containing the existing injected context prompt
+    - one image block per bound image attachment, preserving `path` and `mimeType`
+  - the embedded Codex runtime receives that image block and produces image-aware output.
+  - when the agent does not implement `ContentStreamer`, ngent continues to send the plain injected text prompt with attachment metadata/OCR preview.
+- Verification commands (executed 2026-03-17):
+  - `PATH=/usr/local/go/bin:$PATH go test ./internal/agents/codex -run 'TestStreamContentPassesImageBlocksToEmbeddedRuntime$' -count=1`
+  - `PATH=/usr/local/go/bin:$PATH go test ./internal/httpapi -run 'TestInjectedPromptIncludesAttachmentMetadataAndTextPreview|TestImageAttachmentsUseStructuredPromptWhenAgentSupportsContent' -count=1`
+  - `PATH=/usr/local/go/bin:$PATH go test ./...`
+
+## Requirement 27: Mobile Web UI Chat Layout
+
+- Operation:
+  - run the embedded Web UI and open it at phone-sized widths (`<=768px`) or on a real mobile browser.
+  - inspect the chat header, empty state, composer, attachment chips, and new-thread modal with and without pending uploads.
+- Expected:
+  - the mobile header wraps cleanly without clipping the title, agent badge, or storage usage pill.
+  - the empty state and message list use reduced vertical padding so the composer remains visible above the fold.
+  - the composer stacks controls for touch use: textarea first, config pickers beneath, and upload/send actions in a full-width row.
+  - bottom controls and modals respect browser safe areas and do not sit flush against notches or bottom bars.
+- Verification commands (executed 2026-03-17):
+  - `cd internal/webui/web && npm run build`
+  - `PATH=/usr/local/go/bin:$PATH go test ./...`
+  - manual: `make run` -> open `http://127.0.0.1:8686/` on a phone or responsive emulator, confirm the mobile layout matches the expected stacked composer and compact header behavior

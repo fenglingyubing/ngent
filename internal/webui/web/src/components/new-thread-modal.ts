@@ -42,6 +42,7 @@ interface ModalState {
   selectedAgent: string
   cwd: string
   title: string
+  modelId: string
   agentOptionsRaw: string
   advancedOpen: boolean
   submitting: boolean
@@ -123,6 +124,20 @@ function renderModal(s: ModalState, agents: AgentInfo[]): string {
             />
           </div>
 
+          <div class="form-group">
+            <label class="form-label" for="model-id-input">模型 ID <span class="form-optional">（可选）</span></label>
+            <input
+              id="model-id-input"
+              class="settings-input settings-input--mono"
+              type="text"
+              placeholder="例如：gpt-5.4"
+              value="${escHtml(s.modelId)}"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <p class="form-hint">会写入 <code>agentOptions.modelId</code>。适合手动指定未出现在下拉里的模型。</p>
+          </div>
+
           <div class="collapsible ${s.advancedOpen ? 'collapsible--open' : ''}">
             <button class="collapsible-toggle" id="advanced-toggle" type="button">
               <span class="collapsible-chevron">${iconChevron}</span>
@@ -171,6 +186,7 @@ let modalState: ModalState = {
   selectedAgent: '',
   cwd: '',
   title: '',
+  modelId: '',
   agentOptionsRaw: '',
   advancedOpen: false,
   submitting: false,
@@ -201,6 +217,7 @@ function mount(cb: (threadId: string) => void): void {
     selectedAgent: firstAvailable?.id ?? (agents[0]?.id ?? ''),
     cwd: '',
     title: '',
+    modelId: '',
     agentOptionsRaw: '',
     advancedOpen: false,
     submitting: false,
@@ -255,6 +272,10 @@ function bindEvents(): void {
 
   container.querySelector<HTMLInputElement>('#title-input')?.addEventListener('input', e => {
     modalState = { ...modalState, title: (e.target as HTMLInputElement).value }
+  })
+
+  container.querySelector<HTMLInputElement>('#model-id-input')?.addEventListener('input', e => {
+    modalState = { ...modalState, modelId: (e.target as HTMLInputElement).value.trim(), error: '' }
   })
 
   container.querySelector<HTMLTextAreaElement>('#agent-options-input')?.addEventListener('input', e => {
@@ -325,6 +346,9 @@ async function submit(): Promise<void> {
       rerender()
       return
     }
+  }
+  if (modalState.modelId) {
+    agentOptions = { ...(agentOptions ?? {}), modelId: modalState.modelId }
   }
 
   modalState = { ...modalState, submitting: true, error: '' }

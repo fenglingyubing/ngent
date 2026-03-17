@@ -118,4 +118,44 @@ var migrations = []migration{
 			);`,
 		},
 	},
+	{
+		version: 9,
+		name:    "create_uploads",
+		sql: []string{
+			`CREATE TABLE IF NOT EXISTS uploads (
+				upload_id TEXT PRIMARY KEY,
+				client_id TEXT NOT NULL,
+				thread_id TEXT NOT NULL DEFAULT '',
+				turn_id TEXT NOT NULL DEFAULT '',
+				role TEXT NOT NULL,
+				kind TEXT NOT NULL,
+				status TEXT NOT NULL,
+				origin_name TEXT NOT NULL,
+				stored_name TEXT NOT NULL,
+				mime_type TEXT NOT NULL,
+				size_bytes INTEGER NOT NULL,
+				storage_path TEXT NOT NULL,
+				thumbnail_path TEXT NOT NULL DEFAULT '',
+				sha256 TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL,
+				last_accessed_at TEXT NOT NULL,
+				deleted_at TEXT NOT NULL DEFAULT ''
+			);`,
+			`CREATE INDEX IF NOT EXISTS idx_uploads_client_status_created_at ON uploads(client_id, status, created_at);`,
+			`CREATE INDEX IF NOT EXISTS idx_uploads_thread_created_at ON uploads(thread_id, created_at);`,
+			`CREATE INDEX IF NOT EXISTS idx_uploads_turn_id ON uploads(turn_id);`,
+		},
+	},
+	{
+		version: 10,
+		name:    "create_storage_usage",
+		sql: []string{
+			`CREATE TABLE IF NOT EXISTS storage_usage (
+				scope TEXT PRIMARY KEY,
+				used_bytes INTEGER NOT NULL,
+				max_bytes INTEGER NOT NULL,
+				updated_at TEXT NOT NULL
+			);`,
+		},
+	},
 }

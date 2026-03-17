@@ -2,23 +2,35 @@ package httpapi
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/draw"
+	_ "image/gif"
+	_ "image/jpeg"
+	"image/png"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/beyond5959/ngent/internal/agents"
 	"github.com/beyond5959/ngent/internal/agents/acpmodel"
@@ -51,6 +63,16 @@ type ThreadStore interface {
 	GetSessionTranscriptCache(ctx context.Context, agentID, cwd, sessionID string) (storage.SessionTranscriptCache, error)
 	UpsertSessionTranscriptCache(ctx context.Context, params storage.UpsertSessionTranscriptCacheParams) error
 	ListThreadsByClient(ctx context.Context, clientID string) ([]storage.Thread, error)
+	CreateUpload(ctx context.Context, params storage.CreateUploadParams) (storage.Upload, error)
+	GetUpload(ctx context.Context, uploadID string) (storage.Upload, error)
+	ListUploadsByClient(ctx context.Context, clientID string) ([]storage.Upload, error)
+	BindUploadsToTurn(ctx context.Context, params storage.BindUploadsToTurnParams) ([]storage.Upload, error)
+	ListUploadsByTurn(ctx context.Context, turnID string) ([]storage.Upload, error)
+	GetStorageUsage(ctx context.Context, scope string) (storage.StorageUsage, error)
+	AddStorageUsageBytes(ctx context.Context, scope string, delta int64) error
+	RecalculateStorageUsage(ctx context.Context, scope string) (storage.StorageUsage, error)
+	CleanupStorageUsageToLimit(ctx context.Context, scope string, targetBytes int64) (storage.QuotaCleanupResult, error)
+	DeleteUpload(ctx context.Context, clientID, uploadID string) (storage.DeleteUploadResult, error)
 	CreateTurn(ctx context.Context, params storage.CreateTurnParams) (storage.Turn, error)
 	GetTurn(ctx context.Context, turnID string) (storage.Turn, error)
 	ListTurnsByThread(ctx context.Context, threadID string) ([]storage.Turn, error)
@@ -121,6 +143,9 @@ const (
 	defaultCompactMaxChars    = 4000
 	defaultAgentIdleTTL       = 5 * time.Minute
 	defaultPermissionTimeout  = 2 * time.Hour
+	defaultUploadMaxBytes     = 50 * 1024 * 1024
+	defaultUploadTotalBytes   = 200 * 1024 * 1024
+	defaultUploadMaxFiles     = 10
 
 	threadAgentOptionFreshSessionKey = "_ngentFreshSession"
 	eventTypeReasoningDelta          = "reasoning_delta"
@@ -310,6 +335,22 @@ func (s *Server) routeV1(w http.ResponseWriter, r *http.Request, clientID string
 		s.handleAgents(w, r)
 		return
 	}
+	if r.URL.Path == "/v1/uploads" {
+		s.handleUploads(w, r, clientID)
+		return
+	}
+	if r.URL.Path == "/v1/storage" {
+		s.handleStorageUsage(w, r)
+		return
+	}
+	if uploadID, ok := parseUploadPath(r.URL.Path); ok {
+		s.handleUploadResource(w, r, clientID, uploadID)
+		return
+	}
+	if uploadID, thumbnail, ok := parseAttachmentPath(r.URL.Path); ok {
+		s.handleAttachment(w, r, clientID, uploadID, thumbnail)
+		return
+	}
 	if agentID, ok := parseAgentModelsPath(r.URL.Path); ok {
 		s.handleAgentModels(w, r, agentID)
 		return
@@ -336,6 +377,586 @@ func (s *Server) routeV1(w http.ResponseWriter, r *http.Request, clientID string
 	}
 
 	writeError(w, http.StatusNotFound, "NOT_FOUND", "endpoint not found", map[string]any{"path": r.URL.Path})
+}
+
+func (s *Server) handleUploads(w http.ResponseWriter, r *http.Request, clientID string) {
+	if r.Method != http.MethodPost {
+		writeMethodNotAllowed(w, r)
+		return
+	}
+
+	usage, err := s.store.GetStorageUsage(r.Context(), storage.GlobalStorageUsageScope)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, codeInternal, "failed to load storage quota", map[string]any{"reason": err.Error()})
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, defaultUploadTotalBytes)
+	if err := r.ParseMultipartForm(defaultUploadTotalBytes); err != nil {
+		writeError(w, http.StatusRequestEntityTooLarge, codeInvalidArgument, "multipart body too large", map[string]any{"limitBytes": defaultUploadTotalBytes})
+		return
+	}
+
+	files := r.MultipartForm.File["files"]
+	if len(files) == 0 {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "files is required", map[string]any{"field": "files"})
+		return
+	}
+	if len(files) > defaultUploadMaxFiles {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "too many files", map[string]any{"maxFiles": defaultUploadMaxFiles})
+		return
+	}
+
+	assetsDir, err := storage.DefaultAssetsDir()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, codeInternal, "failed to resolve assets dir", map[string]any{"reason": err.Error()})
+		return
+	}
+	if err := storage.EnsureAssetsDir(assetsDir); err != nil {
+		writeError(w, http.StatusInternalServerError, codeInternal, "failed to create assets dir", map[string]any{"reason": err.Error()})
+		return
+	}
+
+	var items []uploadResponseItem
+	for _, header := range files {
+		item, writtenBytes, err := s.storeMultipartFile(r.Context(), clientID, assetsDir, header, usage)
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, errUploadTooLarge) {
+				status = http.StatusRequestEntityTooLarge
+			} else if errors.Is(err, errUploadQuotaExceeded) {
+				status = http.StatusConflict
+			} else if errors.Is(err, errUploadUnsupportedType) {
+				status = http.StatusBadRequest
+			} else {
+				status = http.StatusInternalServerError
+			}
+			code := codeInvalidArgument
+			if errors.Is(err, errUploadQuotaExceeded) {
+				code = "QUOTA_EXCEEDED"
+			}
+			s.logUploadRejected(clientID, header.Filename, header.Size, err)
+			writeError(w, status, code, err.Error(), map[string]any{})
+			return
+		}
+		usage.UsedBytes += writtenBytes
+		items = append(items, item)
+		s.logUploadStored(clientID, item, writtenBytes, usage)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"uploads": items})
+}
+
+func (s *Server) handleUploadResource(w http.ResponseWriter, r *http.Request, clientID, uploadID string) {
+	switch r.Method {
+	case http.MethodDelete:
+		result, err := s.store.DeleteUpload(r.Context(), clientID, uploadID)
+		if err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				writeError(w, http.StatusNotFound, codeNotFound, "upload not found", map[string]any{"uploadId": uploadID})
+				return
+			}
+			writeError(w, http.StatusInternalServerError, codeInternal, "failed to delete upload", map[string]any{"reason": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"uploadId":       result.Upload.UploadID,
+			"status":         "deleted",
+			"removedBytes":   result.RemovedBytes,
+			"originalFound":  result.OriginalExists,
+			"thumbnailFound": result.ThumbnailExists,
+		})
+		s.logUploadDeleted(result)
+	default:
+		writeMethodNotAllowed(w, r)
+	}
+}
+
+func (s *Server) handleStorageUsage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w, r)
+		return
+	}
+
+	usage, err := s.store.GetStorageUsage(r.Context(), storage.GlobalStorageUsageScope)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, http.StatusNotFound, codeNotFound, "storage usage not found", map[string]any{"scope": storage.GlobalStorageUsageScope})
+			return
+		}
+		writeError(w, http.StatusInternalServerError, codeInternal, "failed to load storage usage", map[string]any{"reason": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"scope":        usage.Scope,
+		"maxBytes":     usage.MaxBytes,
+		"usedBytes":    usage.UsedBytes,
+		"usagePercent": storageUsagePercent(usage.UsedBytes, usage.MaxBytes),
+		"policy":       "delete_oldest_chat_assets_first",
+	})
+}
+
+func (s *Server) handleAttachment(w http.ResponseWriter, r *http.Request, clientID, uploadID string, thumbnail bool) {
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w, r)
+		return
+	}
+
+	item, err := s.store.GetUpload(r.Context(), uploadID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, http.StatusNotFound, codeNotFound, "attachment not found", map[string]any{"uploadId": uploadID})
+			return
+		}
+		writeError(w, http.StatusInternalServerError, codeInternal, "failed to load attachment", map[string]any{"reason": err.Error()})
+		return
+	}
+	if item.ClientID != clientID || item.Status == "deleted" || item.DeletedAt != nil {
+		writeError(w, http.StatusNotFound, codeNotFound, "attachment not found", map[string]any{"uploadId": uploadID})
+		return
+	}
+
+	path := item.StoragePath
+	contentType := item.MIMEType
+	fileName := item.OriginName
+	dispositionType := "attachment"
+	if item.Kind == "image" {
+		dispositionType = "inline"
+	}
+	if thumbnail {
+		path = strings.TrimSpace(item.ThumbnailPath)
+		fileName = thumbnailFileName(item.OriginName)
+		contentType = "image/png"
+		dispositionType = "inline"
+		if path == "" {
+			writeError(w, http.StatusNotFound, codeNotFound, "attachment thumbnail not found", map[string]any{"uploadId": uploadID})
+			return
+		}
+	}
+
+	s.serveUploadFile(w, r, path, fileName, contentType, dispositionType)
+}
+
+var (
+	errUploadTooLarge        = errors.New("file exceeds size limit")
+	errUploadUnsupportedType = errors.New("unsupported file type")
+	errUploadQuotaExceeded   = errors.New("chat asset storage quota exceeded")
+)
+
+type uploadResponseItem struct {
+	UploadID  string `json:"uploadId"`
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	MIMEType  string `json:"mimeType"`
+	SizeBytes int64  `json:"sizeBytes"`
+}
+
+func (s *Server) storeMultipartFile(ctx context.Context, clientID, assetsDir string, header *multipart.FileHeader, usage storage.StorageUsage) (uploadResponseItem, int64, error) {
+	file, err := header.Open()
+	if err != nil {
+		return uploadResponseItem{}, 0, fmt.Errorf("open uploaded file: %w", err)
+	}
+	defer file.Close()
+
+	if header.Size > defaultUploadMaxBytes {
+		return uploadResponseItem{}, 0, errUploadTooLarge
+	}
+
+	sniff := make([]byte, 512)
+	n, err := io.ReadFull(file, sniff)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return uploadResponseItem{}, 0, fmt.Errorf("read uploaded file header: %w", err)
+	}
+	sniff = sniff[:n]
+	mimeType := http.DetectContentType(sniff)
+	if !isAllowedUploadMIME(mimeType) {
+		return uploadResponseItem{}, 0, errUploadUnsupportedType
+	}
+
+	uploadID, err := generatePrefixedID("up")
+	if err != nil {
+		return uploadResponseItem{}, 0, fmt.Errorf("generate upload id: %w", err)
+	}
+	ext := sanitizeUploadExt(filepath.Ext(header.Filename), mimeType)
+	storedName := uploadID + ext
+	targetDir := filepath.Join(assetsDir, "uploads", time.Now().UTC().Format("2006/01/02"))
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return uploadResponseItem{}, 0, fmt.Errorf("create upload target dir: %w", err)
+	}
+	targetPath := filepath.Join(targetDir, storedName)
+
+	usage, err = s.ensureQuotaForWrite(ctx, usage, header.Size)
+	if err != nil {
+		return uploadResponseItem{}, 0, err
+	}
+
+	out, err := os.Create(targetPath)
+	if err != nil {
+		return uploadResponseItem{}, 0, fmt.Errorf("create upload target file: %w", err)
+	}
+	defer func() { _ = out.Close() }()
+
+	hasher := sha256.New()
+	writer := io.MultiWriter(out, hasher)
+	if len(sniff) > 0 {
+		if _, err := writer.Write(sniff); err != nil {
+			return uploadResponseItem{}, 0, fmt.Errorf("write upload header: %w", err)
+		}
+	}
+	writtenRest, err := io.Copy(writer, file)
+	if err != nil {
+		return uploadResponseItem{}, 0, fmt.Errorf("write upload content: %w", err)
+	}
+	sizeBytes := int64(len(sniff)) + writtenRest
+	thumbnailPath := ""
+	if uploadKindFromMIME(mimeType) == "image" {
+		thumbnailPath, err = generateUploadThumbnail(targetPath, assetsDir, uploadID)
+		if err != nil {
+			_ = os.Remove(targetPath)
+			return uploadResponseItem{}, 0, fmt.Errorf("generate upload thumbnail: %w", err)
+		}
+	}
+	thumbnailBytes, err := fileSizeOnDisk(thumbnailPath)
+	if err != nil {
+		_ = os.Remove(targetPath)
+		if thumbnailPath != "" {
+			_ = os.Remove(thumbnailPath)
+		}
+		return uploadResponseItem{}, 0, fmt.Errorf("stat upload thumbnail: %w", err)
+	}
+	totalStoredBytes := sizeBytes + thumbnailBytes
+	usage, err = s.ensureQuotaAfterWrite(ctx, usage, totalStoredBytes)
+	if err != nil {
+		_ = os.Remove(targetPath)
+		if thumbnailPath != "" {
+			_ = os.Remove(thumbnailPath)
+		}
+		return uploadResponseItem{}, 0, err
+	}
+
+	created, err := s.store.CreateUpload(ctx, storage.CreateUploadParams{
+		UploadID:      uploadID,
+		ClientID:      clientID,
+		ThreadID:      "",
+		TurnID:        "",
+		Role:          "user",
+		Kind:          uploadKindFromMIME(mimeType),
+		Status:        "uploaded",
+		OriginName:    header.Filename,
+		StoredName:    storedName,
+		MIMEType:      mimeType,
+		SizeBytes:     sizeBytes,
+		StoragePath:   targetPath,
+		ThumbnailPath: thumbnailPath,
+		SHA256:        hex.EncodeToString(hasher.Sum(nil)),
+	})
+	if err != nil {
+		_ = os.Remove(targetPath)
+		if thumbnailPath != "" {
+			_ = os.Remove(thumbnailPath)
+		}
+		return uploadResponseItem{}, 0, fmt.Errorf("persist upload metadata: %w", err)
+	}
+	if err := s.store.AddStorageUsageBytes(ctx, storage.GlobalStorageUsageScope, totalStoredBytes); err != nil {
+		_ = os.Remove(targetPath)
+		if thumbnailPath != "" {
+			_ = os.Remove(thumbnailPath)
+		}
+		return uploadResponseItem{}, 0, fmt.Errorf("update storage usage: %w", err)
+	}
+
+	return uploadResponseItem{
+		UploadID:  created.UploadID,
+		Name:      created.OriginName,
+		Kind:      created.Kind,
+		MIMEType:  created.MIMEType,
+		SizeBytes: created.SizeBytes,
+	}, totalStoredBytes, nil
+}
+
+func (s *Server) ensureQuotaForWrite(ctx context.Context, usage storage.StorageUsage, incomingBytes int64) (storage.StorageUsage, error) {
+	if usage.MaxBytes <= 0 || usage.UsedBytes+incomingBytes <= usage.MaxBytes {
+		return usage, nil
+	}
+	targetBytes := usage.MaxBytes - incomingBytes
+	cleanup, err := s.store.CleanupStorageUsageToLimit(ctx, storage.GlobalStorageUsageScope, targetBytes)
+	if err != nil && !errors.Is(err, storage.ErrQuotaExceeded) {
+		return usage, fmt.Errorf("cleanup storage quota before write: %w", err)
+	}
+	s.logQuotaCleanup("prewrite", cleanup)
+	if cleanup.Usage.UsedBytes+incomingBytes > cleanup.Usage.MaxBytes {
+		return cleanup.Usage, errUploadQuotaExceeded
+	}
+	return cleanup.Usage, nil
+}
+
+func (s *Server) ensureQuotaAfterWrite(ctx context.Context, usage storage.StorageUsage, storedBytes int64) (storage.StorageUsage, error) {
+	if usage.MaxBytes <= 0 || usage.UsedBytes+storedBytes <= usage.MaxBytes {
+		return usage, nil
+	}
+	cleanup, err := s.store.CleanupStorageUsageToLimit(ctx, storage.GlobalStorageUsageScope, usage.MaxBytes-storedBytes)
+	if err != nil && !errors.Is(err, storage.ErrQuotaExceeded) {
+		return usage, fmt.Errorf("cleanup storage quota after write: %w", err)
+	}
+	s.logQuotaCleanup("postwrite", cleanup)
+	if cleanup.Usage.UsedBytes+storedBytes > cleanup.Usage.MaxBytes {
+		return cleanup.Usage, errUploadQuotaExceeded
+	}
+	return cleanup.Usage, nil
+}
+
+func (s *Server) logQuotaCleanup(stage string, result storage.QuotaCleanupResult) {
+	if s.logger == nil || result.DeletedUploads == 0 {
+		return
+	}
+	for _, item := range result.Deleted {
+		s.logger.Info("storage.quota_deleted",
+			"stage", stage,
+			"uploadId", item.Upload.UploadID,
+			"clientId", item.Upload.ClientID,
+			"threadId", item.Upload.ThreadID,
+			"removedBytes", item.RemovedBytes,
+			"usedBytes", result.Usage.UsedBytes,
+			"maxBytes", result.Usage.MaxBytes,
+		)
+	}
+}
+
+func (s *Server) logUploadStored(clientID string, item uploadResponseItem, storedBytes int64, usage storage.StorageUsage) {
+	if s.logger == nil {
+		return
+	}
+	s.logger.Info("storage.upload_stored",
+		"clientId", clientID,
+		"uploadId", item.UploadID,
+		"name", item.Name,
+		"kind", item.Kind,
+		"mimeType", item.MIMEType,
+		"sizeBytes", item.SizeBytes,
+		"storedBytes", storedBytes,
+		"usedBytes", usage.UsedBytes,
+		"maxBytes", usage.MaxBytes,
+	)
+}
+
+func (s *Server) logUploadRejected(clientID, name string, sizeBytes int64, err error) {
+	if s.logger == nil || err == nil {
+		return
+	}
+	code := codeInvalidArgument
+	if errors.Is(err, errUploadQuotaExceeded) {
+		code = "QUOTA_EXCEEDED"
+	}
+	s.logger.Warn("storage.upload_rejected",
+		"clientId", clientID,
+		"name", name,
+		"sizeBytes", sizeBytes,
+		"code", code,
+		"reason", err.Error(),
+	)
+}
+
+func (s *Server) logUploadDeleted(result storage.DeleteUploadResult) {
+	if s.logger == nil {
+		return
+	}
+	s.logger.Info("storage.upload_deleted",
+		"clientId", result.Upload.ClientID,
+		"uploadId", result.Upload.UploadID,
+		"threadId", result.Upload.ThreadID,
+		"removedBytes", result.RemovedBytes,
+		"originalFound", result.OriginalExists,
+		"thumbnailFound", result.ThumbnailExists,
+	)
+}
+
+func generateUploadThumbnail(sourcePath, assetsDir, uploadID string) (string, error) {
+	file, err := os.Open(sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("open source image: %w", err)
+	}
+	defer file.Close()
+
+	src, format, err := image.Decode(file)
+	if err != nil {
+		return "", fmt.Errorf("decode image: %w", err)
+	}
+	if format == "" {
+		return "", errors.New("unknown image format")
+	}
+
+	const maxSide = 1024
+	thumb := resizeImageBounded(src, maxSide)
+	targetDir := filepath.Join(assetsDir, "thumbnails", time.Now().UTC().Format("2006/01/02"))
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return "", fmt.Errorf("create thumbnail dir: %w", err)
+	}
+	targetPath := filepath.Join(targetDir, uploadID+".thumb.png")
+	out, err := os.Create(targetPath)
+	if err != nil {
+		return "", fmt.Errorf("create thumbnail file: %w", err)
+	}
+	defer func() { _ = out.Close() }()
+
+	if err := png.Encode(out, thumb); err != nil {
+		_ = os.Remove(targetPath)
+		return "", fmt.Errorf("encode thumbnail: %w", err)
+	}
+	return targetPath, nil
+}
+
+func resizeImageBounded(src image.Image, maxSide int) image.Image {
+	bounds := src.Bounds()
+	width := bounds.Dx()
+	height := bounds.Dy()
+	if width <= 0 || height <= 0 || maxSide <= 0 {
+		return src
+	}
+	if width <= maxSide && height <= maxSide {
+		dst := image.NewRGBA(image.Rect(0, 0, width, height))
+		draw.Draw(dst, dst.Bounds(), src, bounds.Min, draw.Src)
+		return dst
+	}
+
+	scale := float64(maxSide) / float64(width)
+	if height > width {
+		scale = float64(maxSide) / float64(height)
+	}
+	dstW := max(1, int(float64(width)*scale+0.5))
+	dstH := max(1, int(float64(height)*scale+0.5))
+	dst := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
+	for y := 0; y < dstH; y++ {
+		srcY := bounds.Min.Y + int(float64(y)*float64(height)/float64(dstH))
+		if srcY >= bounds.Max.Y {
+			srcY = bounds.Max.Y - 1
+		}
+		for x := 0; x < dstW; x++ {
+			srcX := bounds.Min.X + int(float64(x)*float64(width)/float64(dstW))
+			if srcX >= bounds.Max.X {
+				srcX = bounds.Max.X - 1
+			}
+			dst.Set(x, y, src.At(srcX, srcY))
+		}
+	}
+	return dst
+}
+
+func thumbnailFileName(originName string) string {
+	name := strings.TrimSpace(originName)
+	if name == "" {
+		return "thumbnail.png"
+	}
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	if strings.TrimSpace(base) == "" {
+		base = "thumbnail"
+	}
+	return base + ".thumb.png"
+}
+
+func fileSizeOnDisk(path string) (int64, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return 0, nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if info.IsDir() {
+		return 0, nil
+	}
+	return info.Size(), nil
+}
+
+func isAllowedUploadMIME(mimeType string) bool {
+	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
+	if strings.HasPrefix(mimeType, "text/") || strings.HasPrefix(mimeType, "image/") {
+		return true
+	}
+	switch mimeType {
+	case "application/pdf", "application/json", "application/zip", "application/x-zip-compressed":
+		return true
+	default:
+		return false
+	}
+}
+
+func uploadKindFromMIME(mimeType string) string {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(mimeType)), "image/") {
+		return "image"
+	}
+	return "file"
+}
+
+func normalizeAttachmentIDs(rawIDs []string) []string {
+	normalized := make([]string, 0, len(rawIDs))
+	seen := make(map[string]struct{}, len(rawIDs))
+	for _, rawID := range rawIDs {
+		uploadID := strings.TrimSpace(rawID)
+		if uploadID == "" {
+			continue
+		}
+		if _, exists := seen[uploadID]; exists {
+			continue
+		}
+		seen[uploadID] = struct{}{}
+		normalized = append(normalized, uploadID)
+	}
+	return normalized
+}
+
+func toAttachmentSummaryResponse(items []storage.Upload) []attachmentSummary {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]attachmentSummary, 0, len(items))
+	for _, item := range items {
+		out = append(out, attachmentSummary{
+			UploadID:  item.UploadID,
+			Name:      item.OriginName,
+			Kind:      item.Kind,
+			MIMEType:  item.MIMEType,
+			SizeBytes: item.SizeBytes,
+			Deleted:   item.DeletedAt != nil || strings.EqualFold(item.Status, "deleted"),
+		})
+	}
+	return out
+}
+
+func sanitizeUploadExt(ext, mimeType string) string {
+	ext = strings.ToLower(strings.TrimSpace(ext))
+	if ext != "" && len(ext) <= 10 && strings.HasPrefix(ext, ".") && !strings.Contains(ext, "/") {
+		return ext
+	}
+	switch strings.ToLower(strings.TrimSpace(mimeType)) {
+	case "image/png":
+		return ".png"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/webp":
+		return ".webp"
+	case "application/pdf":
+		return ".pdf"
+	case "application/json":
+		return ".json"
+	case "application/zip", "application/x-zip-compressed":
+		return ".zip"
+	default:
+		return ".bin"
+	}
+}
+
+func generatePrefixedID(prefix string) (string, error) {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s_%d_%s", prefix, time.Now().UTC().UnixNano(), hex.EncodeToString(raw[:])), nil
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
@@ -713,8 +1334,9 @@ func (s *Server) handleCreateTurnStream(w http.ResponseWriter, r *http.Request, 
 	}
 
 	var req struct {
-		Input  string `json:"input"`
-		Stream bool   `json:"stream"`
+		Input       string   `json:"input"`
+		Stream      bool     `json:"stream"`
+		Attachments []string `json:"attachments"`
 	}
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "invalid JSON body", map[string]any{"reason": err.Error()})
@@ -724,12 +1346,10 @@ func (s *Server) handleCreateTurnStream(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "stream must be true", map[string]any{"field": "stream"})
 		return
 	}
-
-	injectedPrompt, err := s.buildInjectedPrompt(r.Context(), thread, req.Input)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to build context window", map[string]any{
-			"reason": err.Error(),
-		})
+	req.Input = strings.TrimSpace(req.Input)
+	req.Attachments = normalizeAttachmentIDs(req.Attachments)
+	if req.Input == "" && len(req.Attachments) == 0 {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "input or attachments is required", map[string]any{"field": "input"})
 		return
 	}
 
@@ -777,6 +1397,60 @@ func (s *Server) handleCreateTurnStream(w http.ResponseWriter, r *http.Request, 
 		IsInternal:  false,
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to create turn", map[string]any{"reason": err.Error()})
+		return
+	}
+	if len(req.Attachments) > 0 {
+		if _, err := s.store.BindUploadsToTurn(r.Context(), storage.BindUploadsToTurnParams{
+			ClientID:  clientID,
+			ThreadID:  thread.ThreadID,
+			TurnID:    turnID,
+			Role:      "user",
+			UploadIDs: req.Attachments,
+		}); err != nil {
+			_ = s.store.FinalizeTurn(r.Context(), storage.FinalizeTurnParams{
+				TurnID:       turnID,
+				ResponseText: "",
+				Status:       "failed",
+				StopReason:   "error",
+				ErrorMessage: err.Error(),
+			})
+			switch {
+			case errors.Is(err, storage.ErrNotFound):
+				writeError(w, http.StatusNotFound, codeNotFound, "attachment not found", map[string]any{"attachments": req.Attachments})
+			case errors.Is(err, storage.ErrConflict):
+				writeError(w, http.StatusConflict, codeConflict, "attachment cannot be reused", map[string]any{"attachments": req.Attachments})
+			default:
+				writeError(w, http.StatusBadRequest, codeInvalidArgument, "invalid attachments", map[string]any{"reason": err.Error()})
+			}
+			return
+		}
+	}
+
+	turnAttachments, err := s.store.ListUploadsByTurn(r.Context(), turnID)
+	if err != nil {
+		_ = s.store.FinalizeTurn(r.Context(), storage.FinalizeTurnParams{
+			TurnID:       turnID,
+			ResponseText: "",
+			Status:       "failed",
+			StopReason:   "error",
+			ErrorMessage: err.Error(),
+		})
+		writeError(w, http.StatusInternalServerError, codeInternal, "failed to load bound attachments", map[string]any{"reason": err.Error()})
+		return
+	}
+
+	injectedPrompt, promptContent, err := s.buildTurnPrompt(r.Context(), thread, req.Input, turnAttachments)
+	if err != nil {
+		_ = s.store.FinalizeTurn(r.Context(), storage.FinalizeTurnParams{
+			TurnID:       turnID,
+			ResponseText: "",
+			Status:       "failed",
+			StopReason:   "error",
+			ErrorMessage: err.Error(),
+		})
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to build context window", map[string]any{
+			"reason": err.Error(),
+		})
 		return
 	}
 
@@ -924,10 +1598,20 @@ func (s *Server) handleCreateTurnStream(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	stopReason, streamErr := streamAgent.Stream(turnCtx, injectedPrompt, func(delta string) error {
+	streamDelta := func(delta string) error {
 		aggregated.WriteString(delta)
 		return emit("message_delta", map[string]any{"turnId": turnID, "delta": delta})
-	})
+	}
+
+	var (
+		stopReason agents.StopReason
+		streamErr  error
+	)
+	if contentStreamer, ok := streamAgent.(agents.ContentStreamer); ok && len(promptContent) > 0 {
+		stopReason, streamErr = contentStreamer.StreamContent(turnCtx, promptContent, streamDelta)
+	} else {
+		stopReason, streamErr = streamAgent.Stream(turnCtx, injectedPrompt, streamDelta)
+	}
 
 	finalStatus := "completed"
 	finalReason := string(agents.StopReasonEndTurn)
@@ -1267,6 +1951,12 @@ func (s *Server) handleThreadHistory(w http.ResponseWriter, r *http.Request, cli
 			ErrorMessage: turn.ErrorMessage,
 			CreatedAt:    turn.CreatedAt.UTC().Format(time.RFC3339Nano),
 		}
+		attachments, attachErr := s.store.ListUploadsByTurn(r.Context(), turn.TurnID)
+		if attachErr != nil {
+			writeError(w, http.StatusInternalServerError, codeInternal, "failed to list attachments", map[string]any{"reason": attachErr.Error()})
+			return
+		}
+		respTurn.Attachments = toAttachmentSummaryResponse(attachments)
 		if turn.CompletedAt != nil {
 			completed := turn.CompletedAt.UTC().Format(time.RFC3339Nano)
 			respTurn.CompletedAt = &completed
@@ -2037,9 +2727,13 @@ func (s *Server) rebindManagedAgentScope(threadID, fromAgentOptionsJSON, toAgent
 	return nil
 }
 
-func (s *Server) buildInjectedPrompt(ctx context.Context, thread storage.Thread, input string) (string, error) {
+func (s *Server) buildInjectedPrompt(ctx context.Context, thread storage.Thread, input string, attachments []storage.Upload) (string, error) {
+	currentInput, err := buildPromptInputWithAttachments(ctx, input, attachments)
+	if err != nil {
+		return "", err
+	}
 	if threadSessionID(thread.AgentOptionsJSON) != "" || threadFreshSessionRequested(thread.AgentOptionsJSON) {
-		return strings.TrimSpace(input), nil
+		return strings.TrimSpace(currentInput), nil
 	}
 
 	recentTurns, err := s.loadRecentVisibleTurns(ctx, thread.ThreadID)
@@ -2050,9 +2744,23 @@ func (s *Server) buildInjectedPrompt(ctx context.Context, thread storage.Thread,
 	return composeContextPrompt(
 		thread.Summary,
 		recentTurns,
-		input,
+		currentInput,
 		s.contextMaxChars,
 	), nil
+}
+
+func (s *Server) buildTurnPrompt(
+	ctx context.Context,
+	thread storage.Thread,
+	input string,
+	attachments []storage.Upload,
+) (string, []agents.PromptContentBlock, error) {
+	injectedPrompt, err := s.buildInjectedPrompt(ctx, thread, input, attachments)
+	if err != nil {
+		return "", nil, err
+	}
+	content := buildPromptContentBlocks(injectedPrompt, attachments)
+	return injectedPrompt, content, nil
 }
 
 func (s *Server) buildCompactPrompt(ctx context.Context, thread storage.Thread, maxSummaryChars int) (string, error) {
@@ -2165,6 +2873,181 @@ func renderContextPrompt(summary string, recentTurns []storage.Turn, currentInpu
 	return builder.String()
 }
 
+func buildPromptInputWithAttachments(ctx context.Context, input string, attachments []storage.Upload) (string, error) {
+	input = strings.TrimSpace(input)
+	if len(attachments) == 0 {
+		return input, nil
+	}
+
+	var builder strings.Builder
+	if input != "" {
+		builder.WriteString(input)
+		builder.WriteString("\n\n")
+	}
+	builder.WriteString("[Attached Assets]\n")
+	for i, item := range attachments {
+		builder.WriteString(fmt.Sprintf("%d. %s\n", i+1, strings.TrimSpace(item.OriginName)))
+		builder.WriteString(fmt.Sprintf("   - uploadId: %s\n", strings.TrimSpace(item.UploadID)))
+		builder.WriteString(fmt.Sprintf("   - kind: %s\n", strings.TrimSpace(item.Kind)))
+		builder.WriteString(fmt.Sprintf("   - mimeType: %s\n", strings.TrimSpace(item.MIMEType)))
+		builder.WriteString(fmt.Sprintf("   - sizeBytes: %d\n", item.SizeBytes))
+
+		textPreview, ok, err := attachmentTextPreview(ctx, item)
+		if err != nil {
+			return "", err
+		}
+		switch {
+		case ok:
+			builder.WriteString("   - textPreview:\n")
+			for _, line := range strings.Split(textPreview, "\n") {
+				builder.WriteString("     ")
+				builder.WriteString(line)
+				builder.WriteString("\n")
+			}
+		case item.Kind == "image":
+			builder.WriteString("   - note: no OCR text could be extracted from this image attachment.\n")
+		default:
+			builder.WriteString("   - note: binary attachment available in chat history metadata only.\n")
+		}
+	}
+
+	if input == "" {
+		builder.WriteString("\nThe user sent attachments without extra text. You should inspect the attached asset metadata and any injected text preview before responding.\n")
+	}
+
+	return strings.TrimSpace(builder.String()), nil
+}
+
+func buildPromptContentBlocks(promptText string, attachments []storage.Upload) []agents.PromptContentBlock {
+	imageBlocks := make([]agents.PromptContentBlock, 0, len(attachments))
+	for _, item := range attachments {
+		if strings.TrimSpace(item.Kind) != "image" {
+			continue
+		}
+		path := strings.TrimSpace(item.StoragePath)
+		if path == "" {
+			continue
+		}
+		imageBlocks = append(imageBlocks, agents.PromptContentBlock{
+			Type:     agents.PromptContentTypeImage,
+			Path:     path,
+			Name:     strings.TrimSpace(item.OriginName),
+			MIMEType: strings.TrimSpace(item.MIMEType),
+		})
+	}
+	if len(imageBlocks) == 0 {
+		return nil
+	}
+
+	blocks := make([]agents.PromptContentBlock, 0, len(imageBlocks)+1)
+	if text := strings.TrimSpace(promptText); text != "" {
+		blocks = append(blocks, agents.PromptContentBlock{
+			Type: agents.PromptContentTypeText,
+			Text: text,
+		})
+	}
+	blocks = append(blocks, imageBlocks...)
+	return blocks
+}
+
+func attachmentTextPreview(ctx context.Context, item storage.Upload) (string, bool, error) {
+	mimeType := strings.ToLower(strings.TrimSpace(item.MIMEType))
+	switch {
+	case strings.HasPrefix(mimeType, "text/"), mimeType == "application/json":
+		return textFilePreview(item)
+	case item.Kind == "image":
+		return imageOCRPreview(ctx, item)
+	default:
+		return "", false, nil
+	}
+}
+
+func textFilePreview(item storage.Upload) (string, bool, error) {
+	raw, err := os.ReadFile(strings.TrimSpace(item.StoragePath))
+	if err != nil {
+		return "", false, fmt.Errorf("read attachment preview: %w", err)
+	}
+
+	const maxPreviewBytes = 16 * 1024
+	if len(raw) > maxPreviewBytes {
+		raw = raw[:maxPreviewBytes]
+	}
+
+	preview := strings.TrimSpace(string(raw))
+	if preview == "" {
+		return "", false, nil
+	}
+	if utf8.RuneCountInString(preview) > 4000 {
+		preview = clampToChars(preview, 4000)
+	}
+	return preview, true, nil
+}
+
+func imageOCRPreview(ctx context.Context, item storage.Upload) (string, bool, error) {
+	path := strings.TrimSpace(item.StoragePath)
+	if path == "" {
+		return "", false, nil
+	}
+	text, ok, err := runImageOCR(ctx, path)
+	if err != nil {
+		return "", false, nil
+	}
+	if !ok {
+		return "", false, nil
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", false, nil
+	}
+	if utf8.RuneCountInString(text) > 4000 {
+		text = clampToChars(text, 4000)
+	}
+	return text, true, nil
+}
+
+var runImageOCR = func(ctx context.Context, imagePath string) (string, bool, error) {
+	imagePath = strings.TrimSpace(imagePath)
+	if imagePath == "" {
+		return "", false, nil
+	}
+	if _, err := exec.LookPath("tesseract"); err != nil {
+		return "", false, nil
+	}
+
+	type ocrAttempt struct {
+		lang string
+	}
+	attempts := []ocrAttempt{
+		{lang: "chi_sim+eng"},
+		{lang: "eng"},
+	}
+
+	for _, attempt := range attempts {
+		ocrCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		cmd := exec.CommandContext(ocrCtx, "tesseract", imagePath, "stdout", "-l", attempt.lang, "--psm", "6")
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		cancel()
+		if err == nil {
+			return stdout.String(), true, nil
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ocrCtx.Err(), context.DeadlineExceeded) {
+			return "", false, fmt.Errorf("tesseract timed out")
+		}
+
+		errText := strings.ToLower(stderr.String())
+		if strings.Contains(errText, "failed loading language") || strings.Contains(errText, "could not initialize tesseract") {
+			continue
+		}
+		return "", false, fmt.Errorf("tesseract failed: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+
+	return "", false, nil
+}
+
 func clampToChars(text string, maxChars int) string {
 	if maxChars <= 0 {
 		return ""
@@ -2237,6 +3120,7 @@ type turnHistoryResponse struct {
 	TurnID       string                 `json:"turnId"`
 	RequestText  string                 `json:"requestText"`
 	ResponseText string                 `json:"responseText"`
+	Attachments  []attachmentSummary    `json:"attachments,omitempty"`
 	IsInternal   bool                   `json:"isInternal,omitempty"`
 	Status       string                 `json:"status"`
 	StopReason   string                 `json:"stopReason"`
@@ -2252,6 +3136,15 @@ type eventHistoryResponse struct {
 	Type      string          `json:"type"`
 	Data      json.RawMessage `json:"data"`
 	CreatedAt string          `json:"createdAt"`
+}
+
+type attachmentSummary struct {
+	UploadID  string `json:"uploadId"`
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	MIMEType  string `json:"mimeType"`
+	SizeBytes int64  `json:"sizeBytes"`
+	Deleted   bool   `json:"deleted"`
 }
 
 var (
@@ -2346,6 +3239,48 @@ func parseAgentModelsPath(path string) (agentID string, ok bool) {
 		return "", false
 	}
 	return raw, true
+}
+
+func parseUploadPath(path string) (uploadID string, ok bool) {
+	const prefix = "/v1/uploads/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", false
+	}
+	raw := strings.Trim(strings.TrimPrefix(path, prefix), "/")
+	if raw == "" || strings.Contains(raw, "/") {
+		return "", false
+	}
+	return raw, true
+}
+
+func parseAttachmentPath(path string) (uploadID string, thumbnail bool, ok bool) {
+	const prefix = "/v1/attachments/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", false, false
+	}
+	raw := strings.TrimPrefix(path, prefix)
+	parts := strings.Split(raw, "/")
+	if len(parts) == 1 && parts[0] != "" {
+		return parts[0], false, true
+	}
+	if len(parts) == 2 && parts[0] != "" && parts[1] == "thumbnail" {
+		return parts[0], true, true
+	}
+	return "", false, false
+}
+
+func storageUsagePercent(usedBytes, maxBytes int64) int64 {
+	if maxBytes <= 0 {
+		return 0
+	}
+	if usedBytes <= 0 {
+		return 0
+	}
+	percent := (usedBytes * 100) / maxBytes
+	if percent > 100 {
+		return 100
+	}
+	return percent
 }
 
 func parsePermissionPath(path string) (permissionID string, ok bool) {
@@ -3344,6 +4279,49 @@ func writeMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
 		"method": r.Method,
 		"path":   r.URL.Path,
 	})
+}
+
+func (s *Server) serveUploadFile(w http.ResponseWriter, r *http.Request, path, fileName, contentType, dispositionType string) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		writeError(w, http.StatusNotFound, codeNotFound, "attachment not found", map[string]any{})
+		return
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeError(w, http.StatusNotFound, codeNotFound, "attachment not found", map[string]any{})
+			return
+		}
+		writeError(w, http.StatusInternalServerError, codeInternal, "failed to open attachment", map[string]any{"reason": err.Error()})
+		return
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, codeInternal, "failed to stat attachment", map[string]any{"reason": err.Error()})
+		return
+	}
+	if strings.TrimSpace(contentType) == "" {
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", contentDisposition(dispositionType, fileName))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, fileName, info.ModTime(), file)
+}
+
+func contentDisposition(dispositionType, fileName string) string {
+	dispositionType = strings.TrimSpace(dispositionType)
+	if dispositionType == "" {
+		dispositionType = "attachment"
+	}
+	safe := strings.NewReplacer("\\", "_", "\"", "_", "\r", "_", "\n", "_", ";", "_").Replace(strings.TrimSpace(fileName))
+	if safe == "" {
+		safe = "download"
+	}
+	return fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, dispositionType, safe, url.PathEscape(fileName))
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, payload any) {

@@ -1,0 +1,16 @@
+[Unit]
+Description=Ngent service
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/project/ngent
+ExecStart=/usr/local/bin/ngent --allow-public=false --port 8686
+Restart=always
+RestartSec=3
+Environment=HOME=/home/ubuntu
+
+[Install]
+WantedBy=multi-user.target

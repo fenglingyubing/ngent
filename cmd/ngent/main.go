@@ -54,6 +54,7 @@ func main() {
 	compactMaxChars := flag.Int("compact-max-chars", 4000, "maximum summary characters produced by compact endpoint")
 	agentIdleTTL := flag.Duration("agent-idle-ttl", 5*time.Minute, "idle TTL before closing cached thread agent provider")
 	shutdownGraceTimeout := flag.Duration("shutdown-grace-timeout", 8*time.Second, "graceful shutdown timeout for active turns")
+	storageCleanupInterval := flag.Duration("storage-cleanup-interval", 5*time.Minute, "interval for chat-asset quota cleanup checks")
 	flag.Parse()
 
 	logLevel := slog.LevelInfo
@@ -89,6 +90,10 @@ func main() {
 	}
 	if *shutdownGraceTimeout <= 0 {
 		logger.Error("startup.invalid_shutdown_grace_timeout", "value", shutdownGraceTimeout.String())
+		os.Exit(1)
+	}
+	if *storageCleanupInterval <= 0 {
+		logger.Error("startup.invalid_storage_cleanup_interval", "value", storageCleanupInterval.String())
 		os.Exit(1)
 	}
 
@@ -137,11 +142,42 @@ func main() {
 		logger.Error("startup.invalid_db_path", "error", err.Error(), "dbPath", *dbPath)
 		os.Exit(1)
 	}
+	assetsDir, err := storage.DefaultAssetsDir()
+	if err != nil {
+		logger.Error("startup.invalid_assets_dir", "error", err.Error())
+		os.Exit(1)
+	}
+	if err := storage.EnsureAssetsDir(assetsDir); err != nil {
+		logger.Error("startup.assets_dir_failed", "error", err.Error(), "assetsDir", assetsDir)
+		os.Exit(1)
+	}
 
 	store, err := storage.New(*dbPath)
 	if err != nil {
 		logger.Error("startup.storage_open_failed", "error", err.Error(), "dbPath", *dbPath)
 		os.Exit(1)
+	}
+	if usage, err := store.RecalculateStorageUsage(context.Background(), storage.GlobalStorageUsageScope); err != nil {
+		logger.Error("startup.storage_usage_reconcile_failed", "error", err.Error())
+		os.Exit(1)
+	} else {
+		logger.Info("startup.storage_usage_reconciled",
+			"scope", usage.Scope,
+			"usedBytes", usage.UsedBytes,
+			"maxBytes", usage.MaxBytes,
+		)
+		if cleanup, cleanupErr := store.CleanupStorageUsageToLimit(context.Background(), storage.GlobalStorageUsageScope, usage.MaxBytes); cleanupErr != nil && !errors.Is(cleanupErr, storage.ErrQuotaExceeded) {
+			logger.Error("startup.storage_cleanup_failed", "error", cleanupErr.Error())
+			os.Exit(1)
+		} else {
+			logQuotaCleanup(logger, "startup", cleanup)
+			if cleanup.Usage.UsedBytes > cleanup.Usage.MaxBytes {
+				logger.Warn("startup.storage_quota_still_exceeded",
+					"usedBytes", cleanup.Usage.UsedBytes,
+					"maxBytes", cleanup.Usage.MaxBytes,
+				)
+			}
+		}
 	}
 	defer func() {
 		if closeErr := store.Close(); closeErr != nil {
@@ -275,6 +311,7 @@ func main() {
 		qwenPreflightErr,
 		claudePreflightErr,
 	))
+	startStorageQuotaJanitor(refreshCtx, store, logger, *storageCleanupInterval)
 	defer func() {
 		if closeErr := handler.Close(); closeErr != nil {
 			logger.Error("shutdown.httpapi_close_failed", "error", closeErr.Error())
@@ -309,6 +346,58 @@ func main() {
 	}
 
 	logger.Info("shutdown.complete", "stoppedAt", time.Now().UTC().Format(time.RFC3339Nano))
+}
+
+func startStorageQuotaJanitor(ctx context.Context, store *storage.Store, logger *slog.Logger, interval time.Duration) {
+	if store == nil || logger == nil || interval <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				usage, err := store.GetStorageUsage(ctx, storage.GlobalStorageUsageScope)
+				if err != nil {
+					logger.Warn("storage.cleanup_check_failed", "error", err.Error())
+					continue
+				}
+				cleanup, err := store.CleanupStorageUsageToLimit(ctx, storage.GlobalStorageUsageScope, usage.MaxBytes)
+				if err != nil && !errors.Is(err, storage.ErrQuotaExceeded) {
+					logger.Warn("storage.cleanup_failed", "error", err.Error())
+					continue
+				}
+				logQuotaCleanup(logger, "periodic", cleanup)
+				if cleanup.Usage.UsedBytes > cleanup.Usage.MaxBytes {
+					logger.Warn("storage.quota_still_exceeded",
+						"stage", "periodic",
+						"usedBytes", cleanup.Usage.UsedBytes,
+						"maxBytes", cleanup.Usage.MaxBytes,
+					)
+				}
+			}
+		}
+	}()
+}
+
+func logQuotaCleanup(logger *slog.Logger, stage string, result storage.QuotaCleanupResult) {
+	if logger == nil || result.DeletedUploads == 0 {
+		return
+	}
+	for _, item := range result.Deleted {
+		logger.Info("storage.quota_deleted",
+			"stage", stage,
+			"uploadId", item.Upload.UploadID,
+			"clientId", item.Upload.ClientID,
+			"threadId", item.Upload.ThreadID,
+			"removedBytes", item.RemovedBytes,
+			"usedBytes", result.Usage.UsedBytes,
+			"maxBytes", result.Usage.MaxBytes,
+		)
+	}
 }
 
 const agentConfigCatalogRefreshTimeout = 20 * time.Second

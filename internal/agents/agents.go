@@ -18,6 +18,28 @@ type Streamer interface {
 	Stream(ctx context.Context, input string, onDelta func(delta string) error) (StopReason, error)
 }
 
+const (
+	PromptContentTypeText  = "text"
+	PromptContentTypeImage = "image"
+)
+
+// PromptContentBlock is one structured prompt content block.
+type PromptContentBlock struct {
+	Type     string
+	Text     string
+	Data     string
+	URI      string
+	Path     string
+	Name     string
+	MIMEType string
+}
+
+// ContentStreamer accepts structured prompt content such as image blocks.
+type ContentStreamer interface {
+	Name() string
+	StreamContent(ctx context.Context, content []PromptContentBlock, onDelta func(delta string) error) (StopReason, error)
+}
+
 // ModelOption describes one selectable model entry reported by an agent.
 type ModelOption struct {
 	ID   string

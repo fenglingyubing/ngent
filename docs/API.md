@@ -22,6 +22,11 @@ This document defines the current HTTP API contract.
   - `duration_ms`
   - `resp_bytes`
 - Structured log `time` is emitted as UTC `time.DateTime` with second precision.
+- Chat-asset lifecycle also emits structured stderr JSON logs:
+  - `storage.upload_stored`
+  - `storage.upload_rejected`
+  - `storage.upload_deleted`
+  - `storage.quota_deleted`
 - When server starts with `--debug=true`, stderr also emits `acp.message` debug entries for ACP JSON-RPC traffic with:
   - `component`
   - `direction` (`inbound|outbound`)
@@ -246,12 +251,15 @@ All errors use:
 ```json
 {
   "input": "hello",
-  "stream": true
+  "stream": true,
+  "attachments": ["up_123", "up_456"]
 }
 ```
 
 - Behavior:
   - response is SSE (`text/event-stream`).
+  - `input` may be empty only when `attachments` contains at least one upload id.
+  - `attachments` are deduplicated, must belong to the same `X-Client-ID`, must still be in `uploaded` state, and can be bound only once.
   - same `(thread, sessionId)` scope allows only one active turn at a time.
   - if another turn is active on that same scope, return `409 CONFLICT`.
   - different sessions on the same thread may run concurrently after switching `agentOptions.sessionId`.
@@ -373,6 +381,103 @@ All errors use:
 }
 ```
 
+9.1 Attachment summaries inside history turns
+
+- User turns may include `attachments`.
+- Each summary contains:
+
+```json
+{
+  "uploadId": "up_123",
+  "name": "design.png",
+  "kind": "image",
+  "mimeType": "image/png",
+  "sizeBytes": 123456,
+  "deleted": false
+}
+```
+
+11. `POST /v1/uploads`
+- Headers: `X-Client-ID` (required), optional bearer auth if enabled.
+- Request: `multipart/form-data`
+  - field `files` may contain 1..10 files.
+- Behavior:
+  - server MIME-sniffs each file and accepts `text/*`, `image/*`, `application/pdf`, `application/json`, and zip payloads.
+  - single file limit: `50 MiB`.
+  - total multipart request limit: `200 MiB`.
+  - files are stored under the chat asset root using server-generated names.
+  - image uploads also generate a PNG thumbnail.
+  - when the server has local `tesseract` available, image attachments may also contribute OCR text to the later model turn prompt.
+  - upload path performs quota cleanup before and after writing; if space still cannot be freed, returns `409 QUOTA_EXCEEDED`.
+- Response `200`:
+
+```json
+{
+  "uploads": [
+    {
+      "uploadId": "up_123",
+      "name": "design.png",
+      "kind": "image",
+      "mimeType": "image/png",
+      "sizeBytes": 123456
+    }
+  ]
+}
+```
+
+12. `DELETE /v1/uploads/{uploadId}`
+- Headers: `X-Client-ID` (required), optional bearer auth if enabled.
+- Ownership rule:
+  - if upload does not exist, is already deleted, or belongs to another client, return `404`.
+- Behavior:
+  - soft-deletes the upload row.
+  - removes original file and thumbnail from disk when present.
+  - immediately decrements `storage_usage.used_bytes`.
+- Response `200`:
+
+```json
+{
+  "uploadId": "up_123",
+  "status": "deleted",
+  "removedBytes": 123999,
+  "originalFound": true,
+  "thumbnailFound": true
+}
+```
+
+13. `GET /v1/attachments/{uploadId}`
+- Headers: `X-Client-ID` (required), optional bearer auth if enabled.
+- Ownership rule:
+  - if upload does not exist, is deleted, or belongs to another client, return `404`.
+- Behavior:
+  - serves the original file with a safe `Content-Disposition`.
+  - image uploads use `inline`; non-image uploads use `attachment`.
+
+14. `GET /v1/attachments/{uploadId}/thumbnail`
+- Headers: `X-Client-ID` (required), optional bearer auth if enabled.
+- Ownership rule:
+  - if upload does not exist, is deleted, belongs to another client, or has no thumbnail, return `404`.
+- Behavior:
+  - serves the generated PNG thumbnail with `inline` disposition.
+
+15. `GET /v1/storage`
+- Headers: `X-Client-ID` (required), optional bearer auth if enabled.
+- Response `200`:
+
+```json
+{
+  "scope": "global",
+  "maxBytes": 5368709120,
+  "usedBytes": 123456,
+  "usagePercent": 2,
+  "policy": "delete_oldest_chat_assets_first"
+}
+```
+
+- Behavior:
+  - `usedBytes` is the reconciled on-disk sum of non-deleted upload originals plus thumbnails.
+  - startup and background cleanup may automatically reduce `usedBytes` by deleting the oldest chat assets first.
+
 ## Baseline Error Codes
 
 - `INVALID_ARGUMENT`: validation failed.
@@ -380,6 +485,7 @@ All errors use:
 - `FORBIDDEN`: path/policy denied.
 - `NOT_FOUND`: endpoint/resource missing, including cross-client thread/turn access.
 - `CONFLICT`: active-turn conflict or invalid cancel state.
+- `QUOTA_EXCEEDED`: chat-asset quota could not be reduced enough for a new upload.
 - `TIMEOUT`: upstream/model operation exceeded allowed time budget.
 - `UPSTREAM_UNAVAILABLE`: configured agent/provider is unavailable or failed to start/respond.
 - `INTERNAL`: unexpected server/storage failure.

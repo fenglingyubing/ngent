@@ -50,6 +50,101 @@
 - ADR-045: Surface hidden agent reasoning as first-class SSE/history events in the Web UI. (Accepted)
 - ADR-046: Collapse finalized Web UI thinking panels by default. (Accepted)
 - ADR-047: Defer thread config-option apply until the next turn boundary. (Accepted)
+- ADR-049: Bind uploaded chat assets at turn creation and expose attachment summaries in history. (Accepted)
+- ADR-050: Serve chat attachments through authenticated download and thumbnail endpoints. (Accepted)
+- ADR-051: Treat storage usage as reconciled on-disk chat-asset bytes. (Accepted)
+- ADR-052: Enforce chat-asset quota by deleting the oldest uploads first. (Accepted)
+- ADR-053: Extract OCR text from image attachments before model turns. (Accepted)
+- ADR-054: Favor stacked composer controls and safe-area spacing on mobile chat screens. (Accepted)
+
+## ADR-053: Extract OCR Text From Image Attachments Before Model Turns
+
+- Status: Accepted
+- Date: 2026-03-17
+- Context:
+  - A3/A4 made image attachments visible in history/UI, but the model turn pipeline still only received plain text prompt input.
+  - users sending screenshots expected the model to read visible text inside the image, yet the backend only injected attachment metadata such as filename and MIME type.
+  - the currently deployed Codex path is not a native multimodal binary-image prompt flow, so image understanding needs an intermediate text extraction step.
+- Decision:
+  - add image attachment OCR to the prompt injection path used by `POST /v1/threads/{threadId}/turns`.
+  - use local `tesseract` when present, preferring `chi_sim+eng` and falling back to `eng`.
+  - inject extracted OCR text into the `[Attached Assets]` section alongside existing attachment metadata and text-file previews.
+  - keep OCR optional and fail-soft: if `tesseract` is absent or extracts nothing, the turn still proceeds with attachment metadata only.
+- Consequences:
+  - screenshot-like image attachments can now materially influence the model response on hosts with `tesseract` installed.
+  - image understanding remains OCR-based, not true multimodal reasoning over arbitrary visual content.
+  - deployment/runtime now benefits from installing `tesseract-ocr` plus relevant language packs on servers expected to handle image attachments.
+
+## ADR-052: Enforce Chat-Asset Quota By Deleting The Oldest Uploads First
+
+- Status: Accepted
+- Date: 2026-03-17
+- Context:
+  - A5 exposed reconciled storage usage, but uploads still hard-failed as soon as `used_bytes + incoming_bytes > max_bytes`, even when old chat assets could be removed safely.
+  - the asset spec for A6 requires automatic cleanup once chat assets exceed `5 GiB`, including startup cleanup for pre-existing drift and background cleanup for later overages.
+  - quota enforcement must keep deleting original files and thumbnails together while preserving auditability through structured logs and stable soft-delete state in `uploads`.
+- Decision:
+  - add a storage-layer cleanup primitive that scans non-deleted uploads in `created_at ASC` order and soft-deletes the oldest assets until `used_bytes <= targetBytes`.
+  - use the same cleanup primitive in four places: startup after disk reconciliation, upload pre-check, upload post-write recheck, and a periodic janitor loop.
+  - represent unrecoverable over-quota state as `QUOTA_EXCEEDED` when no more deletable assets exist or cleanup still cannot free enough space.
+  - record each automatic deletion through structured stderr JSON logs under `storage.quota_deleted`.
+- Consequences:
+  - quota behavior becomes deterministic and consistent across startup, upload, and background maintenance paths.
+  - older chat assets may disappear automatically to preserve headroom for newer uploads, so clients must already tolerate deleted attachment cards and `404` download responses.
+  - the Web UI still needs a future push/poll notification path if product wants live cleanup notices without reload.
+
+## ADR-051: Treat Storage Usage As Reconciled On-Disk Chat-Asset Bytes
+
+- Status: Accepted
+- Date: 2026-03-17
+- Context:
+  - `storage_usage.used_bytes` started as a simple counter for upload payload sizes, but A4 introduced generated thumbnail files that also consume chat-asset quota.
+  - the product spec requires startup-time correction so quota state matches actual disk usage under the asset root, not just the history of successful API increments.
+  - A5 also needs user-visible storage warnings in the Web UI, so stale or partial counters would create misleading UX near the 5 GiB limit.
+- Decision:
+  - define quota usage as the sum of currently existing original upload files plus currently existing thumbnail files for non-deleted uploads.
+  - reconcile `storage_usage.used_bytes` on server startup by scanning persisted upload rows and statting the corresponding files on disk.
+  - update upload accounting to add both original and thumbnail bytes immediately, and add `DELETE /v1/uploads/{uploadId}` so user-initiated removal can drop usage in real time.
+  - surface the reconciled global usage through `GET /v1/storage`, and let the Web UI map `>80%` to warning and `>95%` to strong-warning styling.
+- Consequences:
+  - startup recovers from prior accounting drift and from out-of-band file changes under the asset root.
+  - quota tracking now matches real asset consumption more closely, including generated thumbnails.
+  - upload deletion semantics become part of the storage-quota contract even before A6 automatic cleanup is implemented.
+
+## ADR-050: Serve Chat Attachments Through Authenticated Download And Thumbnail Endpoints
+
+- Status: Accepted
+- Date: 2026-03-17
+- Context:
+  - A3 already persisted upload ownership and turn attachment summaries, but attached assets still had no supported way to be downloaded or previewed from the product.
+  - all `/v1/*` endpoints require the existing bearer-token and `X-Client-ID` contract, so frontend image previews cannot rely on unauthenticated static URLs when auth is enabled.
+  - upload rows already carry `thumbnail_path`, making it unnecessary to introduce a second metadata table just to support image previews.
+- Decision:
+  - add `GET /v1/attachments/{uploadId}` for original asset access and `GET /v1/attachments/{uploadId}/thumbnail` for image thumbnail access, both guarded by same-client ownership checks and `deleted -> 404`.
+  - generate thumbnails during image upload and persist the thumbnail file path directly in the existing `uploads.thumbnail_path` column.
+  - serve original images with `Content-Disposition: inline` so the Web UI preview modal can reuse the same endpoint, while regular files remain `attachment`; all responses also set a sanitized filename and `X-Content-Type-Options: nosniff`.
+  - have the Web UI fetch thumbnails/downloads as authenticated blobs and render them via object URLs instead of direct `<img src="/v1/...">` requests, preserving compatibility with bearer-token protected deployments.
+- Consequences:
+  - attached files and images are now first-class retrievable chat assets without bypassing API auth.
+  - frontend preview/download behavior stays consistent whether or not the server uses bearer-token auth.
+  - thumbnail generation currently follows the server's built-in image decoder coverage and stores thumbnails as PNG files.
+
+## ADR-049: Bind Uploaded Chat Assets At Turn Creation And Expose Attachment Summaries In History
+
+- Status: Accepted
+- Date: 2026-03-17
+- Context:
+  - the Web UI could already upload files into a pending area, but `POST /v1/threads/{threadId}/turns` did not yet accept attachment ids, so uploads were orphaned from chat history.
+  - uploaded assets need single-owner semantics: once attached to a user turn, they must not be silently reused by a different thread or turn.
+  - the chat history API needs enough attachment metadata for the Web UI to reconstruct user messages after reload without waiting for future download/thumbnail APIs.
+- Decision:
+  - extend turn creation requests with `attachments: string[]`, allowing turns with text, attachments, or both while still requiring `stream=true`.
+  - bind uploads to the created turn atomically in storage, enforcing same-client ownership, `uploaded` status, and one-time attachment semantics; conflicting reuse returns `409 CONFLICT`.
+  - include attachment summaries (`uploadId`, `name`, `kind`, `mimeType`, `sizeBytes`, `deleted`) on history turns so the Web UI can render persisted user attachment cards.
+  - reserve the same attachment summary shape on the frontend message model for future assistant-generated attachments, even though A3 only binds user attachments.
+- Consequences:
+  - users can now send attachment-only prompts and recover the attachment view after reload.
+  - future A4 download/thumbnail work can build on the same persisted upload-to-turn relationship without reshaping history payloads.
 
 ## ADR-047: Defer Thread Config-Option Apply Until The Next Turn Boundary
 
@@ -1202,3 +1297,47 @@ Use this template for new decisions.
   - continue ignoring tool-call updates outside transcript replay (rejected: loses important execution state in the UI).
   - flatten tool-call payloads into `message_delta` text (rejected: destroys structure and makes incremental updates ambiguous).
   - keep tool-call state only in browser memory (rejected: reload/history would still lose it).
+
+## ADR-050: Deliver image attachments as structured multimodal prompt blocks when the selected agent supports them
+
+- Status: Accepted
+- Date: 2026-03-17
+- Context:
+  - ngent already persisted chat attachments and exposed them in history/UI, but turn execution still reduced image attachments to attachment metadata plus optional OCR text before calling the agent layer.
+  - the embedded Codex path now runs on an ACP adapter that accepts image content blocks, so the transport no longer requires OCR-only fallback for screenshots.
+  - not every current provider implementation in this repo exposes a structured multimodal prompt entrypoint yet.
+- Decision:
+  - add an optional `agents.ContentStreamer` interface for structured prompt content while preserving the existing plain-text `agents.Streamer` interface.
+  - when a turn has bound image attachments and the selected agent implements `ContentStreamer`, send:
+    - one text block containing the same injected context prompt ngent already builds
+    - one image block per bound image attachment, preserving local path, original name, and `mimeType`
+  - keep the existing plain injected text prompt as the fallback for agents that do not implement `ContentStreamer`.
+- Consequences:
+  - Codex-backed models such as `gpt-5.4` can now inspect the actual uploaded image rather than relying only on OCR text.
+  - attachment metadata/OCR previews remain available in the text block, so current prompt behavior stays stable even after enabling multimodal delivery.
+  - non-Codex providers continue to work unchanged, but they remain on the text/OCR fallback path until their transport support is implemented.
+- Alternatives considered:
+  - replace the global `Streamer` contract with a mandatory structured content API (rejected: too disruptive for existing text-only providers).
+  - send only raw image blocks and drop the text wrapper/OCR metadata (rejected: would regress non-image attachment handling and remove useful context already present in current prompts).
+  - keep OCR-only prompt injection for Codex too (rejected: leaves confirmed multimodal transport support unused).
+
+## ADR-054: Favor stacked composer controls and safe-area spacing on mobile chat screens
+
+- Status: Accepted
+- Date: 2026-03-17
+- Context:
+  - the embedded Web UI was built from a desktop-first flex layout, and on narrow phone screens the chat header, empty state, and composer controls left too much dead space while primary actions crowded into a shallow single row.
+  - the product is commonly opened inside mobile browsers with bottom bars and notches, so controls near the viewport edge need explicit safe-area handling rather than plain fixed padding.
+  - the current chat DOM already separates header, message list, composer, and modal surfaces cleanly enough that the mobile optimization can stay CSS-first instead of rewriting the rendering logic.
+- Decision:
+  - treat `768px` and below as a dedicated mobile layout tier for the embedded Web UI.
+  - on mobile, collapse the composer into a vertical touch-first layout:
+    - message field first
+    - model/reasoning pickers grouped beneath it
+    - upload/send actions in a full-width action row
+  - apply `100dvh`/safe-area-aware spacing to the overall app shell, chat header, composer, drawer, and modal surfaces so browser chrome and phone insets do not crowd the UI.
+  - reduce empty-state and message-list padding on mobile to keep more conversation content visible above the fold.
+- Consequences:
+  - the mobile chat experience is denser and easier to operate one-handed without changing any transport or streaming semantics.
+  - desktop layout remains unchanged because the optimization is isolated to mobile breakpoints.
+  - the remaining mobile gap is overlay polish for the sidebar drawer, not the core chat/composer readability problem.

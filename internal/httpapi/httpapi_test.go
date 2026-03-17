@@ -7,10 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -25,6 +30,20 @@ import (
 	runtimectl "github.com/beyond5959/ngent/internal/runtime"
 	"github.com/beyond5959/ngent/internal/storage"
 )
+
+func pngImageBytes(tb testing.TB) []byte {
+	tb.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	img.Set(0, 0, color.RGBA{R: 255, A: 255})
+	img.Set(1, 0, color.RGBA{G: 255, A: 255})
+	img.Set(0, 1, color.RGBA{B: 255, A: 255})
+	img.Set(1, 1, color.RGBA{R: 255, G: 255, A: 255})
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		tb.Fatalf("encode png: %v", err)
+	}
+	return buf.Bytes()
+}
 
 func TestHealthz(t *testing.T) {
 	h := newTestServer(t, testServerOptions{})
@@ -108,6 +127,129 @@ func TestRequestCompletionLogIncludesPathIPAndStatus(t *testing.T) {
 	}
 	if !reqTime.Equal(reqTime.Truncate(time.Second)) {
 		t.Fatalf("log req_time is not second precision: %q", reqTimeRaw)
+	}
+}
+
+func TestUploadLifecycleStructuredLogs(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+	h := newTestServer(t, testServerOptions{logger: logger})
+
+	uploadRR := performMultipartUploadRequest(t, h, "/v1/uploads", "client-a", []multipartUpload{
+		{name: "hello.txt", contentType: "text/plain", content: []byte("hello upload")},
+	})
+	if uploadRR.Code != http.StatusOK {
+		t.Fatalf("upload status = %d, want %d body=%s", uploadRR.Code, http.StatusOK, uploadRR.Body.String())
+	}
+	var uploadBody struct {
+		Uploads []struct {
+			UploadID string `json:"uploadId"`
+		} `json:"uploads"`
+	}
+	if err := json.Unmarshal(uploadRR.Body.Bytes(), &uploadBody); err != nil {
+		t.Fatalf("unmarshal uploads: %v", err)
+	}
+
+	deleteRR := performJSONRequest(t, h, http.MethodDelete, "/v1/uploads/"+uploadBody.Uploads[0].UploadID, nil, map[string]string{"X-Client-ID": "client-a"})
+	if deleteRR.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, want %d body=%s", deleteRR.Code, http.StatusOK, deleteRR.Body.String())
+	}
+
+	var foundStored, foundDeleted bool
+	for _, line := range strings.Split(strings.TrimSpace(logBuf.String()), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		entry := map[string]any{}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		switch fmt.Sprintf("%v", entry["msg"]) {
+		case "storage.upload_stored":
+			foundStored = true
+			if got := fmt.Sprintf("%v", entry["clientId"]); got != "client-a" {
+				t.Fatalf("upload_stored clientId = %q, want client-a", got)
+			}
+		case "storage.upload_deleted":
+			foundDeleted = true
+			if got := fmt.Sprintf("%v", entry["clientId"]); got != "client-a" {
+				t.Fatalf("upload_deleted clientId = %q, want client-a", got)
+			}
+		}
+	}
+	if !foundStored {
+		t.Fatalf("missing storage.upload_stored log entry, logs:\n%s", logBuf.String())
+	}
+	if !foundDeleted {
+		t.Fatalf("missing storage.upload_deleted log entry, logs:\n%s", logBuf.String())
+	}
+}
+
+func TestUploadQuotaCleanupStructuredLog(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+	h := newTestServer(t, testServerOptions{logger: logger})
+
+	storeImpl, ok := h.store.(*storage.Store)
+	if !ok {
+		t.Fatalf("server store type = %T, want *storage.Store", h.store)
+	}
+
+	root := t.TempDir()
+	oldPath := filepath.Join(root, "old.txt")
+	if err := os.WriteFile(oldPath, []byte("old-file"), 0o644); err != nil {
+		t.Fatalf("WriteFile(old): %v", err)
+	}
+	if _, err := storeImpl.CreateUpload(context.Background(), storage.CreateUploadParams{
+		UploadID:    "up-old",
+		ClientID:    "client-a",
+		Role:        "user",
+		Kind:        "file",
+		Status:      "uploaded",
+		OriginName:  "old.txt",
+		StoredName:  "up-old.txt",
+		MIMEType:    "text/plain",
+		SizeBytes:   int64(len("old-file")),
+		StoragePath: oldPath,
+	}); err != nil {
+		t.Fatalf("CreateUpload(old): %v", err)
+	}
+	if _, err := storeImpl.RecalculateStorageUsage(context.Background(), storage.GlobalStorageUsageScope); err != nil {
+		t.Fatalf("RecalculateStorageUsage(): %v", err)
+	}
+	if err := storeImpl.UpdateStorageUsageLimit(context.Background(), storage.GlobalStorageUsageScope, 10); err != nil {
+		t.Fatalf("UpdateStorageUsageLimit(): %v", err)
+	}
+
+	rr := performMultipartUploadRequest(t, h, "/v1/uploads", "client-a", []multipartUpload{
+		{name: "new.txt", contentType: "text/plain", content: []byte("123456")},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("upload status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(logBuf.String()), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		entry := map[string]any{}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		if fmt.Sprintf("%v", entry["msg"]) != "storage.quota_deleted" {
+			continue
+		}
+		found = true
+		if got := fmt.Sprintf("%v", entry["stage"]); got != "prewrite" {
+			t.Fatalf("quota_deleted stage = %q, want prewrite", got)
+		}
+		if got := fmt.Sprintf("%v", entry["uploadId"]); got != "up-old" {
+			t.Fatalf("quota_deleted uploadId = %q, want up-old", got)
+		}
+	}
+	if !found {
+		t.Fatalf("missing storage.quota_deleted log entry, logs:\n%s", logBuf.String())
 	}
 }
 
@@ -273,6 +415,231 @@ func TestV1AgentModelsUpstreamUnavailable(t *testing.T) {
 		t.Fatalf("status code = %d, want %d", rr.Code, http.StatusServiceUnavailable)
 	}
 	assertErrorCode(t, rr.Body.Bytes(), "UPSTREAM_UNAVAILABLE")
+}
+
+func TestV1UploadsSuccess(t *testing.T) {
+	h := newTestServer(t, testServerOptions{})
+
+	rr := performMultipartUploadRequest(t, h, "/v1/uploads", "client-a", []multipartUpload{
+		{name: "hello.txt", contentType: "text/plain", content: []byte("hello upload")},
+		{name: "image.png", contentType: "image/png", content: pngImageBytes(t)},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	var body struct {
+		Uploads []struct {
+			UploadID  string `json:"uploadId"`
+			Name      string `json:"name"`
+			Kind      string `json:"kind"`
+			MIMEType  string `json:"mimeType"`
+			SizeBytes int64  `json:"sizeBytes"`
+		} `json:"uploads"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if got, want := len(body.Uploads), 2; got != want {
+		t.Fatalf("len(uploads) = %d, want %d", got, want)
+	}
+	if body.Uploads[0].UploadID == "" || body.Uploads[1].UploadID == "" {
+		t.Fatal("uploadId should not be empty")
+	}
+
+	storeImpl, ok := h.store.(*storage.Store)
+	if !ok {
+		t.Fatalf("server store type = %T, want *storage.Store", h.store)
+	}
+	uploads, err := storeImpl.ListUploadsByClient(context.Background(), "client-a")
+	if err != nil {
+		t.Fatalf("ListUploadsByClient(): %v", err)
+	}
+	if got, want := len(uploads), 2; got != want {
+		t.Fatalf("len(stored uploads) = %d, want %d", got, want)
+	}
+	for _, item := range uploads {
+		if _, err := os.Stat(item.StoragePath); err != nil {
+			t.Fatalf("uploaded file missing at %q: %v", item.StoragePath, err)
+		}
+	}
+	usage, err := storeImpl.GetStorageUsage(context.Background(), storage.GlobalStorageUsageScope)
+	if err != nil {
+		t.Fatalf("GetStorageUsage(): %v", err)
+	}
+	if usage.UsedBytes <= 0 {
+		t.Fatalf("usage.UsedBytes = %d, want > 0", usage.UsedBytes)
+	}
+}
+
+func TestStorageUsageReflectsUploadAndDelete(t *testing.T) {
+	h := newTestServer(t, testServerOptions{})
+
+	beforeRR := performJSONRequest(t, h, http.MethodGet, "/v1/storage", nil, map[string]string{"X-Client-ID": "client-a"})
+	if beforeRR.Code != http.StatusOK {
+		t.Fatalf("before storage status = %d, want %d", beforeRR.Code, http.StatusOK)
+	}
+	var before struct {
+		UsedBytes int64 `json:"usedBytes"`
+	}
+	if err := json.Unmarshal(beforeRR.Body.Bytes(), &before); err != nil {
+		t.Fatalf("unmarshal before storage: %v", err)
+	}
+
+	uploadRR := performMultipartUploadRequest(t, h, "/v1/uploads", "client-a", []multipartUpload{
+		{name: "hello.txt", contentType: "text/plain", content: []byte("hello upload")},
+	})
+	if uploadRR.Code != http.StatusOK {
+		t.Fatalf("upload status = %d, want %d", uploadRR.Code, http.StatusOK)
+	}
+	var uploadBody struct {
+		Uploads []struct {
+			UploadID string `json:"uploadId"`
+		} `json:"uploads"`
+	}
+	if err := json.Unmarshal(uploadRR.Body.Bytes(), &uploadBody); err != nil {
+		t.Fatalf("unmarshal uploads: %v", err)
+	}
+
+	afterUploadRR := performJSONRequest(t, h, http.MethodGet, "/v1/storage", nil, map[string]string{"X-Client-ID": "client-a"})
+	if afterUploadRR.Code != http.StatusOK {
+		t.Fatalf("after upload storage status = %d, want %d", afterUploadRR.Code, http.StatusOK)
+	}
+	var afterUpload struct {
+		UsedBytes int64 `json:"usedBytes"`
+	}
+	if err := json.Unmarshal(afterUploadRR.Body.Bytes(), &afterUpload); err != nil {
+		t.Fatalf("unmarshal after upload storage: %v", err)
+	}
+	if afterUpload.UsedBytes <= before.UsedBytes {
+		t.Fatalf("usedBytes after upload = %d, want > %d", afterUpload.UsedBytes, before.UsedBytes)
+	}
+
+	deleteRR := performJSONRequest(t, h, http.MethodDelete, "/v1/uploads/"+uploadBody.Uploads[0].UploadID, nil, map[string]string{"X-Client-ID": "client-a"})
+	if deleteRR.Code != http.StatusOK {
+		t.Fatalf("delete upload status = %d, want %d body=%s", deleteRR.Code, http.StatusOK, deleteRR.Body.String())
+	}
+
+	afterDeleteRR := performJSONRequest(t, h, http.MethodGet, "/v1/storage", nil, map[string]string{"X-Client-ID": "client-a"})
+	if afterDeleteRR.Code != http.StatusOK {
+		t.Fatalf("after delete storage status = %d, want %d", afterDeleteRR.Code, http.StatusOK)
+	}
+	var afterDelete struct {
+		UsedBytes    int64  `json:"usedBytes"`
+		Policy       string `json:"policy"`
+		UsagePercent int64  `json:"usagePercent"`
+	}
+	if err := json.Unmarshal(afterDeleteRR.Body.Bytes(), &afterDelete); err != nil {
+		t.Fatalf("unmarshal after delete storage: %v", err)
+	}
+	if afterDelete.UsedBytes != before.UsedBytes {
+		t.Fatalf("usedBytes after delete = %d, want %d", afterDelete.UsedBytes, before.UsedBytes)
+	}
+	if afterDelete.Policy != "delete_oldest_chat_assets_first" {
+		t.Fatalf("policy = %q, want delete_oldest_chat_assets_first", afterDelete.Policy)
+	}
+	if afterDelete.UsagePercent != 0 {
+		t.Fatalf("usagePercent after delete = %d, want 0", afterDelete.UsagePercent)
+	}
+}
+
+func TestV1UploadsRejectUnsupportedType(t *testing.T) {
+	h := newTestServer(t, testServerOptions{})
+
+	rr := performMultipartUploadRequest(t, h, "/v1/uploads", "client-a", []multipartUpload{
+		{name: "program.exe", contentType: "application/octet-stream", content: []byte("MZ\x00\x01")},
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status code = %d, want %d body=%s", rr.Code, http.StatusBadRequest, rr.Body.String())
+	}
+	assertErrorCode(t, rr.Body.Bytes(), codeInvalidArgument)
+}
+
+func TestV1UploadsRejectTooLargeFile(t *testing.T) {
+	h := newTestServer(t, testServerOptions{})
+
+	large := bytes.Repeat([]byte("a"), defaultUploadMaxBytes+1)
+	rr := performMultipartUploadRequest(t, h, "/v1/uploads", "client-a", []multipartUpload{
+		{name: "large.txt", contentType: "text/plain", content: large},
+	})
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status code = %d, want %d body=%s", rr.Code, http.StatusRequestEntityTooLarge, rr.Body.String())
+	}
+}
+
+func TestV1UploadsAutoCleanupOldestAssetsBeforeWrite(t *testing.T) {
+	h := newTestServer(t, testServerOptions{})
+
+	storeImpl, ok := h.store.(*storage.Store)
+	if !ok {
+		t.Fatalf("server store type = %T, want *storage.Store", h.store)
+	}
+
+	root := t.TempDir()
+	oldPath := filepath.Join(root, "old.txt")
+	if err := os.WriteFile(oldPath, []byte("old-file"), 0o644); err != nil {
+		t.Fatalf("WriteFile(old): %v", err)
+	}
+	if _, err := storeImpl.CreateUpload(context.Background(), storage.CreateUploadParams{
+		UploadID:    "up-old",
+		ClientID:    "client-a",
+		Role:        "user",
+		Kind:        "file",
+		Status:      "uploaded",
+		OriginName:  "old.txt",
+		StoredName:  "up-old.txt",
+		MIMEType:    "text/plain",
+		SizeBytes:   int64(len("old-file")),
+		StoragePath: oldPath,
+	}); err != nil {
+		t.Fatalf("CreateUpload(old): %v", err)
+	}
+	if _, err := storeImpl.RecalculateStorageUsage(context.Background(), storage.GlobalStorageUsageScope); err != nil {
+		t.Fatalf("RecalculateStorageUsage(): %v", err)
+	}
+	if err := storeImpl.UpdateStorageUsageLimit(context.Background(), storage.GlobalStorageUsageScope, 10); err != nil {
+		t.Fatalf("UpdateStorageUsageLimit(): %v", err)
+	}
+
+	rr := performMultipartUploadRequest(t, h, "/v1/uploads", "client-a", []multipartUpload{
+		{name: "new.txt", contentType: "text/plain", content: []byte("123456")},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("upload status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if _, err := os.Stat(oldPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old upload file still exists: %v", err)
+	}
+	oldUpload, err := storeImpl.GetUpload(context.Background(), "up-old")
+	if err != nil {
+		t.Fatalf("GetUpload(up-old): %v", err)
+	}
+	if oldUpload.Status != "deleted" {
+		t.Fatalf("old upload status = %q, want deleted", oldUpload.Status)
+	}
+}
+
+func TestV1UploadsReturnQuotaExceededWhenCleanupCannotFreeEnough(t *testing.T) {
+	h := newTestServer(t, testServerOptions{})
+
+	storeImpl, ok := h.store.(*storage.Store)
+	if !ok {
+		t.Fatalf("server store type = %T, want *storage.Store", h.store)
+	}
+	if err := storeImpl.AddStorageUsageBytes(context.Background(), storage.GlobalStorageUsageScope, 10); err != nil {
+		t.Fatalf("AddStorageUsageBytes(): %v", err)
+	}
+	if err := storeImpl.UpdateStorageUsageLimit(context.Background(), storage.GlobalStorageUsageScope, 5); err != nil {
+		t.Fatalf("UpdateStorageUsageLimit(): %v", err)
+	}
+
+	rr := performMultipartUploadRequest(t, h, "/v1/uploads", "client-a", []multipartUpload{
+		{name: "new.txt", contentType: "text/plain", content: []byte("1234")},
+	})
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("upload status = %d, want %d body=%s", rr.Code, http.StatusConflict, rr.Body.String())
+	}
+	assertErrorCode(t, rr.Body.Bytes(), "QUOTA_EXCEEDED")
 }
 
 func TestV1RequiresClientID(t *testing.T) {
@@ -1845,6 +2212,210 @@ func TestTurnsSSEAndHistory(t *testing.T) {
 	}
 }
 
+func TestTurnsBindAttachmentsAndHistoryIncludesSummaries(t *testing.T) {
+	root := t.TempDir()
+	h := newTestServer(t, testServerOptions{allowedRoots: []string{root}})
+
+	threadID := createThreadForClient(t, h, "client-a", root)
+	uploadRR := performMultipartUploadRequest(t, h, "/v1/uploads", "client-a", []multipartUpload{
+		{name: "design.png", contentType: "image/png", content: pngImageBytes(t)},
+		{name: "notes.txt", contentType: "text/plain", content: []byte("hello attachment")},
+	})
+	if uploadRR.Code != http.StatusOK {
+		t.Fatalf("upload status code = %d, want %d", uploadRR.Code, http.StatusOK)
+	}
+
+	var uploadBody struct {
+		Uploads []struct {
+			UploadID string `json:"uploadId"`
+		} `json:"uploads"`
+	}
+	if err := json.Unmarshal(uploadRR.Body.Bytes(), &uploadBody); err != nil {
+		t.Fatalf("unmarshal uploads: %v", err)
+	}
+	if got, want := len(uploadBody.Uploads), 2; got != want {
+		t.Fatalf("len(uploads) = %d, want %d", got, want)
+	}
+
+	turnRR := performJSONRequest(t, h, http.MethodPost, "/v1/threads/"+threadID+"/turns", map[string]any{
+		"input":       "",
+		"stream":      true,
+		"attachments": []string{uploadBody.Uploads[0].UploadID, uploadBody.Uploads[1].UploadID},
+	}, map[string]string{"X-Client-ID": "client-a"})
+	if turnRR.Code != http.StatusOK {
+		t.Fatalf("turn status code = %d, want %d", turnRR.Code, http.StatusOK)
+	}
+
+	historyRR := performJSONRequest(t, h, http.MethodGet, "/v1/threads/"+threadID+"/history", nil, map[string]string{"X-Client-ID": "client-a"})
+	if historyRR.Code != http.StatusOK {
+		t.Fatalf("history status code = %d, want %d", historyRR.Code, http.StatusOK)
+	}
+
+	var history struct {
+		Turns []struct {
+			RequestText string `json:"requestText"`
+			Attachments []struct {
+				UploadID string `json:"uploadId"`
+				Name     string `json:"name"`
+				Kind     string `json:"kind"`
+			} `json:"attachments"`
+		} `json:"turns"`
+	}
+	if err := json.Unmarshal(historyRR.Body.Bytes(), &history); err != nil {
+		t.Fatalf("unmarshal history: %v", err)
+	}
+	if got, want := len(history.Turns), 1; got != want {
+		t.Fatalf("len(history.turns) = %d, want %d", got, want)
+	}
+	if got := history.Turns[0].RequestText; got != "" {
+		t.Fatalf("requestText = %q, want empty", got)
+	}
+	if got, want := len(history.Turns[0].Attachments), 2; got != want {
+		t.Fatalf("len(history.turns[0].attachments) = %d, want %d", got, want)
+	}
+	if got := history.Turns[0].Attachments[0].Kind; got != "image" {
+		t.Fatalf("attachments[0].kind = %q, want image", got)
+	}
+	if got := history.Turns[0].Attachments[1].Name; got != "notes.txt" {
+		t.Fatalf("attachments[1].name = %q, want notes.txt", got)
+	}
+}
+
+func TestAttachmentDownloadAndThumbnailEndpoints(t *testing.T) {
+	root := t.TempDir()
+	h := newTestServer(t, testServerOptions{allowedRoots: []string{root}})
+
+	uploadRR := performMultipartUploadRequest(t, h, "/v1/uploads", "client-a", []multipartUpload{
+		{name: "diagram.png", contentType: "image/png", content: pngImageBytes(t)},
+		{name: "notes.txt", contentType: "text/plain", content: []byte("download me")},
+	})
+	if uploadRR.Code != http.StatusOK {
+		t.Fatalf("upload status code = %d, want %d", uploadRR.Code, http.StatusOK)
+	}
+
+	var uploadBody struct {
+		Uploads []struct {
+			UploadID string `json:"uploadId"`
+			Name     string `json:"name"`
+			Kind     string `json:"kind"`
+		} `json:"uploads"`
+	}
+	if err := json.Unmarshal(uploadRR.Body.Bytes(), &uploadBody); err != nil {
+		t.Fatalf("unmarshal uploads: %v", err)
+	}
+	if got, want := len(uploadBody.Uploads), 2; got != want {
+		t.Fatalf("len(uploads) = %d, want %d", got, want)
+	}
+
+	imageID := uploadBody.Uploads[0].UploadID
+	fileID := uploadBody.Uploads[1].UploadID
+
+	thumbRR := performJSONRequest(t, h, http.MethodGet, "/v1/attachments/"+imageID+"/thumbnail", nil, map[string]string{
+		"X-Client-ID": "client-a",
+	})
+	if thumbRR.Code != http.StatusOK {
+		t.Fatalf("thumbnail status code = %d, want %d", thumbRR.Code, http.StatusOK)
+	}
+	if got := thumbRR.Header().Get("Content-Type"); got != "image/png" {
+		t.Fatalf("thumbnail content-type = %q, want image/png", got)
+	}
+	if got := thumbRR.Header().Get("Content-Disposition"); !strings.Contains(got, `inline;`) {
+		t.Fatalf("thumbnail content-disposition = %q, want inline", got)
+	}
+
+	downloadRR := performJSONRequest(t, h, http.MethodGet, "/v1/attachments/"+fileID, nil, map[string]string{
+		"X-Client-ID": "client-a",
+	})
+	if downloadRR.Code != http.StatusOK {
+		t.Fatalf("download status code = %d, want %d", downloadRR.Code, http.StatusOK)
+	}
+	if got := downloadRR.Header().Get("Content-Disposition"); !strings.Contains(got, `attachment;`) || !strings.Contains(got, `filename="notes.txt"`) {
+		t.Fatalf("download content-disposition = %q, want attachment filename", got)
+	}
+	if got := downloadRR.Body.String(); got != "download me" {
+		t.Fatalf("download body = %q, want %q", got, "download me")
+	}
+}
+
+func TestAttachmentDeletedReturnsNotFound(t *testing.T) {
+	root := t.TempDir()
+	h := newTestServer(t, testServerOptions{allowedRoots: []string{root}})
+
+	storeImpl, ok := h.store.(*storage.Store)
+	if !ok {
+		t.Fatalf("server store type = %T, want *storage.Store", h.store)
+	}
+
+	storagePath := filepath.Join(root, "deleted.txt")
+	if err := os.WriteFile(storagePath, []byte("deleted"), 0o644); err != nil {
+		t.Fatalf("write deleted file: %v", err)
+	}
+	if _, err := storeImpl.CreateUpload(context.Background(), storage.CreateUploadParams{
+		UploadID:    "up-deleted",
+		ClientID:    "client-a",
+		Role:        "user",
+		Kind:        "file",
+		Status:      "deleted",
+		OriginName:  "deleted.txt",
+		StoredName:  "deleted.txt",
+		MIMEType:    "text/plain",
+		SizeBytes:   int64(len("deleted")),
+		StoragePath: storagePath,
+		SHA256:      "deadbeef",
+	}); err != nil {
+		t.Fatalf("CreateUpload(): %v", err)
+	}
+
+	rr := performJSONRequest(t, h, http.MethodGet, "/v1/attachments/up-deleted", nil, map[string]string{
+		"X-Client-ID": "client-a",
+	})
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status code = %d, want %d", rr.Code, http.StatusNotFound)
+	}
+	assertErrorCode(t, rr.Body.Bytes(), codeNotFound)
+}
+
+func TestTurnsRejectReusedAttachmentAcrossThreads(t *testing.T) {
+	root := t.TempDir()
+	h := newTestServer(t, testServerOptions{allowedRoots: []string{root}})
+
+	threadOneID := createThreadForClient(t, h, "client-a", root)
+	threadTwoID := createThreadForClient(t, h, "client-a", root)
+	uploadRR := performMultipartUploadRequest(t, h, "/v1/uploads", "client-a", []multipartUpload{
+		{name: "reuse.txt", contentType: "text/plain", content: []byte("cannot reuse")},
+	})
+	if uploadRR.Code != http.StatusOK {
+		t.Fatalf("upload status code = %d, want %d", uploadRR.Code, http.StatusOK)
+	}
+	var uploadBody struct {
+		Uploads []struct {
+			UploadID string `json:"uploadId"`
+		} `json:"uploads"`
+	}
+	if err := json.Unmarshal(uploadRR.Body.Bytes(), &uploadBody); err != nil {
+		t.Fatalf("unmarshal uploads: %v", err)
+	}
+
+	firstTurnRR := performJSONRequest(t, h, http.MethodPost, "/v1/threads/"+threadOneID+"/turns", map[string]any{
+		"input":       "first use",
+		"stream":      true,
+		"attachments": []string{uploadBody.Uploads[0].UploadID},
+	}, map[string]string{"X-Client-ID": "client-a"})
+	if firstTurnRR.Code != http.StatusOK {
+		t.Fatalf("first turn status code = %d, want %d", firstTurnRR.Code, http.StatusOK)
+	}
+
+	secondTurnRR := performJSONRequest(t, h, http.MethodPost, "/v1/threads/"+threadTwoID+"/turns", map[string]any{
+		"input":       "second use",
+		"stream":      true,
+		"attachments": []string{uploadBody.Uploads[0].UploadID},
+	}, map[string]string{"X-Client-ID": "client-a"})
+	if secondTurnRR.Code != http.StatusConflict {
+		t.Fatalf("second turn status code = %d, want %d", secondTurnRR.Code, http.StatusConflict)
+	}
+	assertErrorCode(t, secondTurnRR.Body.Bytes(), codeConflict)
+}
+
 func TestTurnsSSEIncludesReasoningAndPersistsHistory(t *testing.T) {
 	root := t.TempDir()
 	h := newTestServer(t, testServerOptions{
@@ -2753,6 +3324,199 @@ func TestInjectedPromptIncludesSummaryAndRecent(t *testing.T) {
 	}
 }
 
+func TestInjectedPromptIncludesAttachmentMetadataAndTextPreview(t *testing.T) {
+	root := t.TempDir()
+	recorder := &recordingStreamer{}
+	prevOCR := runImageOCR
+	runImageOCR = func(ctx context.Context, imagePath string) (string, bool, error) {
+		_ = ctx
+		_ = imagePath
+		return "截图中的 OCR 文本", true, nil
+	}
+	t.Cleanup(func() {
+		runImageOCR = prevOCR
+	})
+	h := newTestServer(t, testServerOptions{
+		allowedRoots: []string{root},
+		agent:        recorder,
+	})
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	threadID := createThreadHTTP(t, ts.URL, "client-a", root)
+
+	uploadRR := performMultipartUploadRequest(t, h, "/v1/uploads", "client-a", []multipartUpload{
+		{name: "design.png", contentType: "image/png", content: pngImageBytes(t)},
+		{name: "notes.txt", contentType: "text/plain", content: []byte("hello attachment preview")},
+	})
+	if uploadRR.Code != http.StatusOK {
+		t.Fatalf("upload status = %d, want %d body=%s", uploadRR.Code, http.StatusOK, uploadRR.Body.String())
+	}
+	var uploadBody struct {
+		Uploads []struct {
+			UploadID string `json:"uploadId"`
+		} `json:"uploads"`
+	}
+	if err := json.Unmarshal(uploadRR.Body.Bytes(), &uploadBody); err != nil {
+		t.Fatalf("unmarshal uploads: %v", err)
+	}
+
+	turnRR := performJSONRequest(t, h, http.MethodPost, "/v1/threads/"+threadID+"/turns", map[string]any{
+		"input":       "请处理这些附件",
+		"stream":      true,
+		"attachments": []string{uploadBody.Uploads[0].UploadID, uploadBody.Uploads[1].UploadID},
+	}, map[string]string{"X-Client-ID": "client-a"})
+	if turnRR.Code != http.StatusOK {
+		t.Fatalf("turn status = %d, want %d body=%s", turnRR.Code, http.StatusOK, turnRR.Body.String())
+	}
+
+	lastInput := recorder.LastInput()
+	if !strings.Contains(lastInput, "[Attached Assets]") {
+		t.Fatalf("prompt missing attachment section: %q", lastInput)
+	}
+	if !strings.Contains(lastInput, "design.png") {
+		t.Fatalf("prompt missing image attachment name: %q", lastInput)
+	}
+	if !strings.Contains(lastInput, "截图中的 OCR 文本") {
+		t.Fatalf("prompt missing image OCR preview: %q", lastInput)
+	}
+	if !strings.Contains(lastInput, "notes.txt") {
+		t.Fatalf("prompt missing text attachment name: %q", lastInput)
+	}
+	if !strings.Contains(lastInput, "hello attachment preview") {
+		t.Fatalf("prompt missing text attachment preview: %q", lastInput)
+	}
+}
+
+func TestImageAttachmentsUseStructuredPromptWhenAgentSupportsContent(t *testing.T) {
+	root := t.TempDir()
+	recorder := &multimodalRecordingStreamer{}
+	prevOCR := runImageOCR
+	runImageOCR = func(ctx context.Context, imagePath string) (string, bool, error) {
+		_ = ctx
+		_ = imagePath
+		return "截图中的 OCR 文本", true, nil
+	}
+	t.Cleanup(func() {
+		runImageOCR = prevOCR
+	})
+	h := newTestServer(t, testServerOptions{
+		allowedRoots: []string{root},
+		agent:        recorder,
+	})
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	threadID := createThreadHTTP(t, ts.URL, "client-a", root)
+
+	uploadRR := performMultipartUploadRequest(t, h, "/v1/uploads", "client-a", []multipartUpload{
+		{name: "design.png", contentType: "image/png", content: pngImageBytes(t)},
+	})
+	if uploadRR.Code != http.StatusOK {
+		t.Fatalf("upload status = %d, want %d body=%s", uploadRR.Code, http.StatusOK, uploadRR.Body.String())
+	}
+	var uploadBody struct {
+		Uploads []struct {
+			UploadID string `json:"uploadId"`
+		} `json:"uploads"`
+	}
+	if err := json.Unmarshal(uploadRR.Body.Bytes(), &uploadBody); err != nil {
+		t.Fatalf("unmarshal uploads: %v", err)
+	}
+
+	turnRR := performJSONRequest(t, h, http.MethodPost, "/v1/threads/"+threadID+"/turns", map[string]any{
+		"input":       "请处理这张图",
+		"stream":      true,
+		"attachments": []string{uploadBody.Uploads[0].UploadID},
+	}, map[string]string{"X-Client-ID": "client-a"})
+	if turnRR.Code != http.StatusOK {
+		t.Fatalf("turn status = %d, want %d body=%s", turnRR.Code, http.StatusOK, turnRR.Body.String())
+	}
+
+	if got := recorder.LastInput(); got != "" {
+		t.Fatalf("plain Stream() should not be used, got input %q", got)
+	}
+	content := recorder.LastContent()
+	if got, want := len(content), 2; got != want {
+		t.Fatalf("len(content) = %d, want %d", got, want)
+	}
+	if got := content[0].Type; got != agents.PromptContentTypeText {
+		t.Fatalf("content[0].Type = %q, want %q", got, agents.PromptContentTypeText)
+	}
+	if got := content[1].Type; got != agents.PromptContentTypeImage {
+		t.Fatalf("content[1].Type = %q, want %q", got, agents.PromptContentTypeImage)
+	}
+	if got := content[1].Path; got == "" {
+		t.Fatal("content[1].Path should not be empty")
+	}
+	if got := content[1].MIMEType; got != "image/png" {
+		t.Fatalf("content[1].MIMEType = %q, want %q", got, "image/png")
+	}
+	if got := content[1].Name; got != "design.png" {
+		t.Fatalf("content[1].Name = %q, want %q", got, "design.png")
+	}
+	if !strings.Contains(content[0].Text, "[Attached Assets]") {
+		t.Fatalf("text block missing attachment section: %q", content[0].Text)
+	}
+	if !strings.Contains(content[0].Text, "截图中的 OCR 文本") {
+		t.Fatalf("text block missing OCR preview: %q", content[0].Text)
+	}
+}
+
+func TestImageOCRErrorFailsSoftAndTurnStillStreams(t *testing.T) {
+	root := t.TempDir()
+	recorder := &recordingStreamer{}
+	prevOCR := runImageOCR
+	runImageOCR = func(ctx context.Context, imagePath string) (string, bool, error) {
+		_ = ctx
+		_ = imagePath
+		return "", false, errors.New("tesseract timed out")
+	}
+	t.Cleanup(func() {
+		runImageOCR = prevOCR
+	})
+	h := newTestServer(t, testServerOptions{
+		allowedRoots: []string{root},
+		agent:        recorder,
+	})
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	threadID := createThreadHTTP(t, ts.URL, "client-a", root)
+
+	uploadRR := performMultipartUploadRequest(t, h, "/v1/uploads", "client-a", []multipartUpload{
+		{name: "design.png", contentType: "image/png", content: pngImageBytes(t)},
+	})
+	if uploadRR.Code != http.StatusOK {
+		t.Fatalf("upload status = %d, want %d body=%s", uploadRR.Code, http.StatusOK, uploadRR.Body.String())
+	}
+	var uploadBody struct {
+		Uploads []struct {
+			UploadID string `json:"uploadId"`
+		} `json:"uploads"`
+	}
+	if err := json.Unmarshal(uploadRR.Body.Bytes(), &uploadBody); err != nil {
+		t.Fatalf("unmarshal uploads: %v", err)
+	}
+
+	turnRR := performJSONRequest(t, h, http.MethodPost, "/v1/threads/"+threadID+"/turns", map[string]any{
+		"input":       "请看图",
+		"stream":      true,
+		"attachments": []string{uploadBody.Uploads[0].UploadID},
+	}, map[string]string{"X-Client-ID": "client-a"})
+	if turnRR.Code != http.StatusOK {
+		t.Fatalf("turn status = %d, want %d body=%s", turnRR.Code, http.StatusOK, turnRR.Body.String())
+	}
+
+	lastInput := recorder.LastInput()
+	if strings.Contains(lastInput, "tesseract timed out") {
+		t.Fatalf("prompt should not expose OCR failure details: %q", lastInput)
+	}
+	if !strings.Contains(lastInput, "no OCR text could be extracted from this image attachment") {
+		t.Fatalf("prompt missing fail-soft image note: %q", lastInput)
+	}
+}
+
 func TestComposeContextPromptFirstTurnPassThrough(t *testing.T) {
 	input := "/mcp call demo_server demo_tool {}"
 
@@ -3046,6 +3810,38 @@ func performJSONRequest(t *testing.T, h http.Handler, method, path string, body 
 		req.Header.Set(k, v)
 	}
 
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	return rr
+}
+
+type multipartUpload struct {
+	name        string
+	contentType string
+	content     []byte
+}
+
+func performMultipartUploadRequest(t *testing.T, h http.Handler, path, clientID string, files []multipartUpload) *httptest.ResponseRecorder {
+	t.Helper()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for _, file := range files {
+		part, err := writer.CreateFormFile("files", file.name)
+		if err != nil {
+			t.Fatalf("CreateFormFile(%q): %v", file.name, err)
+		}
+		if _, err := part.Write(file.content); err != nil {
+			t.Fatalf("part.Write(%q): %v", file.name, err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("writer.Close(): %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, path, &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-Client-ID", clientID)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	return rr
@@ -3545,6 +4341,58 @@ func (s *sessionTranscriptStreamer) LoadSessionTranscript(ctx context.Context, r
 
 func (s *sessionTranscriptStreamer) LoadCalls() int32 {
 	return s.loadCalls.Load()
+}
+
+type recordingStreamer struct {
+	lastInput atomic.Value
+}
+
+func (s *recordingStreamer) Name() string {
+	return "recording-streamer"
+}
+
+func (s *recordingStreamer) Stream(ctx context.Context, input string, onDelta func(delta string) error) (agents.StopReason, error) {
+	_ = ctx
+	s.lastInput.Store(input)
+	if err := onDelta(input); err != nil {
+		return agents.StopReasonEndTurn, err
+	}
+	return agents.StopReasonEndTurn, nil
+}
+
+func (s *recordingStreamer) LastInput() string {
+	value := s.lastInput.Load()
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
+}
+
+type multimodalRecordingStreamer struct {
+	recordingStreamer
+	lastContent atomic.Value
+}
+
+func (s *multimodalRecordingStreamer) StreamContent(
+	ctx context.Context,
+	content []agents.PromptContentBlock,
+	onDelta func(delta string) error,
+) (agents.StopReason, error) {
+	_ = ctx
+	cloned := append([]agents.PromptContentBlock(nil), content...)
+	s.lastContent.Store(cloned)
+	if err := onDelta("content"); err != nil {
+		return agents.StopReasonEndTurn, err
+	}
+	return agents.StopReasonEndTurn, nil
+}
+
+func (s *multimodalRecordingStreamer) LastContent() []agents.PromptContentBlock {
+	value := s.lastContent.Load()
+	if blocks, ok := value.([]agents.PromptContentBlock); ok {
+		return append([]agents.PromptContentBlock(nil), blocks...)
+	}
+	return nil
 }
 
 func createThreadHTTP(t *testing.T, baseURL, clientID, root string) string {
