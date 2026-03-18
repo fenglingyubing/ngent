@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChatGPT Style UI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 隐藏标准滚动条，使用极简风格 */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background-color: rgba(0, 0, 0, 0.1);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background-color: rgba(0, 0, 0, 0.2);
+        }
+        textarea {
+            -ms-overflow-style: none; /* IE and Edge */
+            scrollbar-width: none; /* Firefox */
+        }
+        textarea::-webkit-scrollbar {
+            display: none; /* Chrome, Safari and Opera */
+        }
+    </style>
+</head>
+<body class="h-screen w-full bg-white flex text-[#0d0d0d] font-sans overflow-hidden antialiased">
+
+    <aside class="w-[260px] bg-[#171717] text-[#ececf1] flex flex-col flex-shrink-0 transition-all duration-300">
+        <div class="p-3">
+            <button class="w-full hover:bg-[#202123] text-white py-2.5 px-3 rounded-lg flex items-center justify-between transition duration-200 text-sm">
+                <div class="flex items-center gap-3">
+                    <div class="w-7 h-7 bg-white text-black rounded-full flex items-center justify-center text-xs font-bold">N</div>
+                    <span class="font-medium">新对话</span>
+                </div>
+                <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+            </button>
+        </div>
+
+        <div class="p-3 flex-1 overflow-y-auto">
+            <h3 class="text-xs font-semibold text-[#8e8ea0] px-3 mb-2 mt-4">今天</h3>
+            <ul class="space-y-0.5">
+                <li class="px-3 py-2 bg-[#202123] rounded-lg cursor-pointer text-sm truncate transition text-white">java八股文需要背到什么程...</li>
+                <li class="px-3 py-2 hover:bg-[#202123] rounded-lg cursor-pointer text-sm truncate transition text-[#ececf1]">ArrayList源码里的hugeCa...</li>
+            </ul>
+
+            <h3 class="text-xs font-semibold text-[#8e8ea0] px-3 mb-2 mt-6">前 7 天</h3>
+            <ul class="space-y-0.5">
+                <li class="px-3 py-2 hover:bg-[#202123] rounded-lg cursor-pointer text-sm truncate transition text-[#ececf1]">给我一张决策表的图</li>
+                <li class="px-3 py-2 hover:bg-[#202123] rounded-lg cursor-pointer text-sm truncate transition text-[#ececf1]">在java中能不能修改HashMap...</li>
+            </ul>
+        </div>
+    </aside>
+
+    <main class="flex-1 flex flex-col min-w-0 bg-white relative">
+        <header class="h-14 flex items-center justify-between px-4 bg-white sticky top-0 z-10">
+            <div class="flex items-center gap-2 group cursor-pointer rounded-lg hover:bg-gray-50 px-2 py-1 transition">
+                <span class="text-lg font-semibold text-gray-700">gpt-5.2 codex</span>
+                <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+            </div>
+            
+            <div class="flex items-center gap-2">
+                <button class="p-2 hover:bg-gray-100 rounded-lg text-gray-500 transition">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                </button>
+            </div>
+        </header>
+
+        <div class="flex-1 overflow-y-auto w-full flex flex-col items-center pb-8">
+            <div class="w-full max-w-3xl flex flex-col gap-6 px-4 pt-8">
+                
+                <div class="flex justify-end w-full">
+                    <div class="max-w-[70%] bg-[#f4f4f4] text-[#0d0d0d] rounded-3xl px-5 py-2.5">
+                        <p class="leading-relaxed">java八股文需要背到什么程度才能去找实习？</p>
+                    </div>
+                </div>
+
+                <div class="flex w-full gap-4">
+                    <div class="w-8 h-8 rounded-full bg-[#10a37f] flex items-center justify-center shrink-0 text-white mt-1">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="icon-md"><path fill-rule="evenodd" clip-rule="evenodd" d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A6.0651 6.0651 0 0 0 19.02 19.818a5.9847 5.9847 0 0 0 3.9977-2.9001 6.0516 6.0516 0 0 0-.7358-7.0968zM8.7505 19.3826a4.5468 4.5468 0 0 1-2.88-1.1506 4.5047 4.5047 0 0 1-1.317-3.0805v-5.2662l4.197 2.4231v4.832c-.0045.088-.0045.176 0 .264v1.9782zm6.5255-14.765a4.5468 4.5468 0 0 1 2.88 1.1505 4.5047 4.5047 0 0 1 1.317 3.0806v5.2662l-4.197-2.4231v-4.832c.0045-.088.0045-.176 0-.264v-1.9782zM4.553 10.334a4.5468 4.5468 0 0 1 1.1444-2.883 4.5047 4.5047 0 0 1 3.0768-1.325h5.2592l-2.4199 4.2023H6.7816a.4655.4655 0 0 0-.2636.0046H4.553zm14.894 3.332a4.5468 4.5468 0 0 1-1.1444 2.883 4.5047 4.5047 0 0 1-3.0768 1.325h-5.2592l2.4199-4.2023h4.832a.4655.4655 0 0 0 .2636-.0046h1.9649zm-8.4975-4.4984l-2.0985-1.2116v7.0094l2.0985 1.2115 4.197-2.423v-7.0095l-4.197 2.4232z" fill="currentColor"></path></svg>
+                    </div>
+                    <div class="flex-1 text-[#0d0d0d] prose prose-slate max-w-none mt-1">
+                        <p class="leading-relaxed mb-4 text-[15px]">不用背到“面试官问啥都能原封不动复述”的程度，<strong>能把高频题讲明白 + 能结合项目说出来</strong>，就已经可以开始找 Java 实习了。</p>
+                        
+                        <h4 class="font-bold text-[16px] mb-2">先说结论</h4>
+                        <ul class="list-disc pl-5 space-y-1.5 mb-5 text-[15px]">
+                            <li><strong>实习更看重：</strong> 基础是否扎实、能不能写代码、有没有项目</li>
+                            <li><strong>八股要做到：</strong> 高频必会，常见熟悉，冷门知道即可</li>
+                            <li>不要等“全背完”再投，通常会错过最佳时间</li>
+                        </ul>
+
+                        <h4 class="font-bold text-[16px] mb-2">实习前够用的标准</h4>
+                        <ul class="list-disc pl-5 space-y-1.5 text-[15px]">
+                            <li><strong>Java 基础：</strong> 集合、异常、泛型、反射、注解、IO、JVM 基本内存模型能讲清</li>
+                            <li><strong>并发基础：</strong> <code>synchronized</code>、<code>volatile</code>、<code>ThreadLocal</code>、线程池、CAS、锁升级有概念</li>
+                        </ul>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <div class="absolute bottom-0 left-0 w-full bg-gradient-to-t from-white via-white to-transparent pt-6 pb-6 px-4">
+            <div class="max-w-3xl mx-auto relative">
+                <div class="relative flex items-end bg-[#f4f4f4] rounded-2xl border border-transparent focus-within:border-gray-300 transition-colors shadow-[0_0_15px_rgba(0,0,0,0.05)] overflow-hidden pl-3 pr-2 py-2">
+                    
+                    <button class="p-2 text-gray-500 hover:text-black transition rounded-full shrink-0 mb-0.5">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+                    </button>
+
+                    <textarea 
+                        id="chat-input"
+                        class="flex-1 bg-transparent py-2.5 px-2 max-h-48 resize-none outline-none text-[#0d0d0d] leading-relaxed text-[15px]" 
+                        rows="1" 
+                        placeholder="给“gpt-5.2 codex”发送消息..."></textarea>
+
+                    <button id="send-btn" class="p-2 m-1 bg-black hover:bg-gray-800 text-white rounded-lg transition shrink-0 mb-0.5 disabled:bg-gray-300 disabled:text-gray-500" disabled>
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                    </button>
+                </div>
+                <div class="text-center text-xs text-gray-400 mt-2">
+                    AI 可能会犯错。请核对重要信息。
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // 简单的 JavaScript 实现输入框高度自适应和发送按钮状态
+        const textarea = document.getElementById('chat-input');
+        const sendBtn = document.getElementById('send-btn');
+
+        textarea.addEventListener('input', function() {
+            // 控制按钮状态
+            if (this.value.trim().length > 0) {
+                sendBtn.removeAttribute('disabled');
+            } else {
+                sendBtn.setAttribute('disabled', 'true');
+            }
+
+            // 自动重置和计算高度
+            this.style.height = 'auto';
+            this.style.height = (this.scrollHeight) + 'px';
+            
+            // 限制最大高度
+            if (this.scrollHeight > 192) { // max-h-48 差不多是 192px
+                this.style.overflowY = 'auto';
+            } else {
+                this.style.overflowY = 'hidden';
+            }
+        });
+    </script>
+</body>
+</html>
