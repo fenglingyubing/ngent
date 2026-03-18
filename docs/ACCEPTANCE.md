@@ -506,3 +506,76 @@ This checklist defines executable acceptance checks for requirements 1-16.
   - `cd internal/webui/web && npm run build`
   - `PATH=/usr/local/go/bin:$PATH go test ./...`
   - manual: `make run` -> open `http://127.0.0.1:8686/` on a phone or responsive emulator, confirm the mobile layout matches the expected stacked composer and compact header behavior
+
+## Requirement 28: Refresh Recovers Active Thread And Mobile Can Start Fresh Sessions
+
+- Operation:
+  - open the Web UI with at least one existing thread.
+  - hard-refresh the page.
+  - on a phone-width viewport, open the restored thread and use the chat-header `新会话` action.
+- Expected:
+  - when thread data exists, reload selects the newest available thread instead of falling back to the empty `未选择 Agent` page.
+  - this recovery does not require persisting runtime chat state in localStorage.
+  - on mobile, the chat header exposes a visible `新会话` action even though the desktop session sidebar is hidden.
+- Verification commands (executed 2026-03-17):
+  - `cd internal/webui/web && npm run build`
+  - `PATH=/usr/local/go/bin:$PATH go test ./...`
+  - manual: refresh the page with existing threads present, confirm the newest thread is opened automatically; in a phone-width viewport confirm tapping `新会话` switches the thread into a fresh session scope
+
+## Requirement 29: Mobile Sidebar Backdrop Dismissal
+
+- Operation:
+  - open the Web UI on a phone-width viewport.
+  - open the left sidebar from the hamburger button.
+  - tap the dimmed content area outside the drawer.
+- Expected:
+  - a visible backdrop appears behind the sidebar drawer while it is open.
+  - tapping the backdrop closes the drawer.
+  - the mobile `新会话` CTA remains visible in the chat header's primary area after the drawer closes.
+- Verification commands (executed 2026-03-17):
+  - `cd internal/webui/web && npm run build`
+  - `PATH=/usr/local/go/bin:$PATH go test ./...`
+  - manual: on a phone or responsive emulator, open the sidebar, tap outside it to dismiss, then confirm the `新会话` button is visible in the chat header
+
+## Requirement 30: Mobile Session List Bottom Sheet
+
+- Operation:
+  - open the Web UI on a phone-width viewport with an active thread.
+  - tap the mobile chat-header `会话` button.
+  - inspect the opened session list and switch to another session or create a fresh one.
+- Expected:
+  - a bottom-sheet session list opens on mobile.
+  - the sheet reuses the same session data and actions as the desktop right-side session panel.
+  - tapping a session switches to it, and tapping `新建会话` starts a fresh session.
+- Verification commands (executed 2026-03-18):
+  - `cd internal/webui/web && npm run build`
+  - `PATH=/usr/local/go/bin:$PATH go test ./...`
+
+## Requirement 31: Streaming Completion Must Not Force Scroll And Bubble Shell Must Be Visible Immediately
+
+- Operation:
+  - open a thread with enough history that the message list can scroll.
+  - start a long-running model turn, then scroll to the top or middle while the response is still streaming.
+  - wait for the turn to complete.
+- Expected:
+  - streaming deltas only auto-follow while the user remains near the bottom of the message list.
+  - when the final completed message replaces the streaming placeholder, the viewport remains at the user's current scroll position instead of jumping to the bottom.
+  - the streaming agent bubble uses the same full bubble shell layout immediately, without waiting for the final markdown render pass.
+- Verification commands (executed 2026-03-18):
+  - `cd internal/webui/web && npm run build`
+  - `PATH=/usr/local/go/bin:$PATH go test ./...`
+  - manual: start a long response, scroll away from the bottom mid-stream, confirm completion does not yank the list; start another response and confirm the streaming bubble shows full-width bubble chrome as soon as it appears
+
+## Requirement 32: Markdown Code Blocks Must Highlight Common Fence Labels And Unknown Fences Gracefully
+
+- Operation:
+  - render finalized agent markdown containing fenced code blocks labeled with common model-emitted names such as `shell`, `tsx`, `jsx`, and `html`.
+  - also render a fenced code block with no language or with a label outside the explicit registration list.
+- Expected:
+  - supported aliases resolve to a registered highlighter and produce `hljs-*` token markup.
+  - unlabeled or unrecognized fenced code blocks still receive automatic syntax highlighting when highlight.js can infer a language.
+  - code block copy/fold controls continue to work unchanged.
+- Verification commands (executed 2026-03-18):
+  - `cd internal/webui/web && npm run build`
+  - `PATH=/usr/local/go/bin:$PATH go test ./...`
+  - manual: ask the model for fenced `shell` and `tsx` code examples, confirm the final rendered code block contains colored syntax instead of a flat monospace block

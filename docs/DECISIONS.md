@@ -56,6 +56,11 @@
 - ADR-052: Enforce chat-asset quota by deleting the oldest uploads first. (Accepted)
 - ADR-053: Extract OCR text from image attachments before model turns. (Accepted)
 - ADR-054: Favor stacked composer controls and safe-area spacing on mobile chat screens. (Accepted)
+- ADR-055: Restore the newest thread after reload and expose fresh-session action in the mobile header. (Accepted)
+- ADR-056: Use a dedicated mobile sidebar backdrop and keep the fresh-session CTA in the primary header column. (Accepted)
+- ADR-057: Reuse the desktop session panel logic inside a mobile bottom sheet. (Accepted)
+- ADR-058: Preserve user scroll position across streaming completion and render the live bubble with final shell dimensions. (Accepted)
+- ADR-059: Normalize common markdown fence labels and auto-detect unknown code blocks for Web UI highlighting. (Accepted)
 
 ## ADR-053: Extract OCR Text From Image Attachments Before Model Turns
 
@@ -1341,3 +1346,77 @@ Use this template for new decisions.
   - the mobile chat experience is denser and easier to operate one-handed without changing any transport or streaming semantics.
   - desktop layout remains unchanged because the optimization is isolated to mobile breakpoints.
   - the remaining mobile gap is overlay polish for the sidebar drawer, not the core chat/composer readability problem.
+
+## ADR-055: Restore the newest thread after reload and expose fresh-session action in the mobile header
+
+- Status: Accepted
+- Date: 2026-03-17
+- Context:
+  - the Web UI intentionally keeps `activeThreadId` as runtime-only state, so a full reload cleared the current selection even when the thread list still existed.
+  - on phone widths the right-side session panel is hidden, which also removed the only visible `新建会话` control from the active chat surface.
+  - users therefore landed on an empty-state screen after refresh and had no direct way to start a fresh session without reopening the sidebar and re-entering the thread first.
+- Decision:
+  - keep `activeThreadId` non-persistent in browser storage, but derive an initial active thread from the loaded server thread list on startup.
+  - choose the first returned thread as the restore target because `/v1/threads` is already ordered newest-first.
+  - add a dedicated mobile-only `新会话` action in the chat header that calls the same fresh-session path as the desktop session panel button.
+- Consequences:
+  - refresh now returns users to a usable chat thread whenever one exists, without expanding the set of persisted browser-local runtime data.
+  - mobile users no longer depend on the hidden desktop session sidebar to create a fresh session.
+
+## ADR-056: Use a dedicated mobile sidebar backdrop and keep the fresh-session CTA in the primary header column
+
+- Status: Accepted
+- Date: 2026-03-17
+- Context:
+  - the earlier mobile drawer treatment only toggled the sidebar itself, so tapping outside the drawer did nothing.
+  - the first mobile `新会话` placement lived in the header's secondary action row, where it could be visually crowded by cancel/session-info controls.
+- Decision:
+  - render a dedicated mobile-only backdrop element behind the sidebar drawer and close the drawer when that backdrop is tapped.
+  - keep the mobile `新会话` CTA in the header's primary content column under the title/storage area rather than in the secondary action cluster.
+- Consequences:
+  - mobile sidebar behavior now matches common drawer expectations.
+  - the fresh-session entry point is easier to discover and less sensitive to header crowding.
+
+## ADR-057: Reuse the desktop session panel logic inside a mobile bottom sheet
+
+- Status: Accepted
+- Date: 2026-03-18
+- Context:
+  - desktop already had a full session panel on the right side, but mobile only exposed a fresh-session shortcut and still lacked a way to browse or switch historical sessions.
+  - duplicating session loading state and switching logic for mobile would create unnecessary divergence from the desktop implementation.
+- Decision:
+  - add a mobile `会话` button in the chat header.
+  - render the same session panel content into a mobile bottom-sheet container, with one extra close/backdrop affordance for mobile presentation.
+  - keep refresh, new session, pagination, and session switching behavior shared between desktop and mobile through the same panel render/update path.
+- Consequences:
+  - mobile users can now view and switch session history without relying on the hidden desktop right sidebar.
+  - future session behavior changes only need one render/binding path rather than separate mobile and desktop implementations.
+
+## ADR-058: Preserve user scroll position across streaming completion and render the live bubble with final shell dimensions
+
+- Status: Accepted
+- Date: 2026-03-18
+- Context:
+  - the chat message list already avoids auto-following while the user is reading older content during a live stream, but the completion path still rebuilt the final message list and always snapped the viewport back to the bottom.
+  - the temporary streaming bubble also used a more shrink-wrapped layout than the final completed agent bubble, which made the response container look visually unfinished until the markdown re-render happened.
+- Decision:
+  - keep the existing near-bottom auto-follow behavior for live deltas, but when `updateMessageList()` performs a non-streaming re-render, preserve the prior scroll position unless the list was already near the bottom.
+  - render the streaming bubble as a full-width bubble shell from its first frame so the in-progress response occupies the same container geometry as the finalized agent message.
+- Consequences:
+  - users can scroll up during a long response without losing their place when the turn finishes.
+  - the streaming state still does not render live markdown; only the bubble shell and layout now match sooner.
+
+## ADR-059: Normalize common markdown fence labels and auto-detect unknown code blocks for Web UI highlighting
+
+- Status: Accepted
+- Date: 2026-03-18
+- Context:
+  - the Web UI already styled `highlight.js` output, but the registered language subset was narrow and depended on the markdown fence label matching one of a few exact names.
+  - model responses frequently use labels like `shell`, `tsx`, `jsx`, `html`, or omit the language entirely, which caused otherwise valid code blocks to fall back to plain escaped text.
+- Decision:
+  - expand the registered highlight.js subset to cover additional common web and diff languages.
+  - normalize frequent fence aliases before lookup, for example mapping `shell` to `bash` and `tsx` to `typescript`.
+  - when no exact language match exists, use `highlightAuto` as a fallback instead of disabling syntax highlighting entirely.
+- Consequences:
+  - finalized agent code blocks retain syntax highlighting across a much wider range of model output formats.
+  - bundle size increases modestly because the browser now ships a few more highlight.js grammars.

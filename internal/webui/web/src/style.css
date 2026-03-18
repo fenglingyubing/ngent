@@ -536,6 +536,16 @@ body {
   overflow: hidden;
 }
 
+.mobile-session-overlay {
+  display: none;
+}
+
+.mobile-session-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
 .session-panel-header {
   min-height: var(--header-h);
   padding: 12px 14px;
@@ -637,6 +647,10 @@ body {
 }
 
 .session-new-btn {
+  flex-shrink: 0;
+}
+
+.mobile-session-close-btn {
   flex-shrink: 0;
 }
 
@@ -1741,20 +1755,27 @@ body {
 
 /* Typing indicator */
 .message-bubble--streaming {
-  display: inline-flex;
+  display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 8px;
+  width: 100%;
+  max-width: 100%;
   min-height: 34px;
   padding: 9px 14px;
+  box-sizing: border-box;
   line-height: 1.55;
   font-size: var(--font-size-base);
   white-space: pre-wrap;
 }
 
 .message-bubble__text {
+  display: block;
   min-height: 1.55em;
+  min-width: 0;
   width: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .message-bubble__text:empty {
@@ -2414,6 +2435,16 @@ button:disabled, .btn:disabled {
     box-shadow: var(--shadow-md);
   }
 
+  .mobile-sidebar-backdrop:not([hidden]) {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    border: 0;
+    background: rgb(15 23 42 / .18);
+    backdrop-filter: blur(2px);
+  }
+
   .mobile-menu-btn {
     display: flex !important;
   }
@@ -2459,6 +2490,69 @@ button:disabled, .btn:disabled {
     gap: 6px;
   }
 
+  .mobile-session-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 2px;
+    flex-wrap: wrap;
+  }
+
+  .mobile-session-list-btn,
+  .mobile-session-new-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 36px;
+    padding: 0 12px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    color: var(--text-1);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .mobile-session-list-btn:hover:not(:disabled),
+  .mobile-session-new-btn:hover:not(:disabled) {
+    background: var(--bg-3);
+  }
+
+  .mobile-session-overlay:not([hidden]) {
+    position: fixed;
+    inset: 0;
+    z-index: 130;
+    display: block;
+  }
+
+  .mobile-session-overlay-backdrop {
+    position: absolute;
+    inset: 0;
+    border: 0;
+    background: rgb(15 23 42 / .22);
+    backdrop-filter: blur(4px);
+  }
+
+  .mobile-session-sheet {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-height: min(72dvh, 640px);
+    background: var(--bg-2);
+    border-radius: 22px 22px 0 0;
+    box-shadow: 0 -18px 44px rgb(15 23 42 / .18);
+    overflow: hidden;
+    padding-bottom: var(--safe-bottom);
+  }
+
+  .mobile-session-panel .session-panel-header {
+    padding-top: 14px;
+  }
+
+  .mobile-session-panel .session-panel-body {
+    max-height: min(58dvh, 520px);
+  }
+
   .storage-usage {
     max-width: min(100%, 260px);
     gap: 6px;
@@ -2481,20 +2575,26 @@ button:disabled, .btn:disabled {
   }
 
   .thread-config-switches {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
     width: 100%;
     gap: 6px;
   }
 
   .thread-model-switch {
-    width: calc(50% - 3px);
+    width: 100%;
     min-width: 0;
+    max-width: none;
+    flex-basis: 100%;
+    flex: none;
   }
 
   .thread-model-switch--composer {
-    width: calc(50% - 3px);
+    display: flex;
+    width: 100%;
     min-width: 0;
     max-width: none;
-    flex: 1 1 calc(50% - 3px);
+    flex: none;
   }
 
   .thread-model-switch--composer .thread-model-trigger {
@@ -2750,6 +2850,20 @@ button:disabled, .btn:disabled {
 
 .mobile-menu-btn {
   display: none;
+}
+
+.mobile-session-actions {
+  display: none;
+}
+
+.mobile-sidebar-backdrop {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .chat-header-main .mobile-session-actions {
+    display: flex !important;
+  }
 }
 
 /* ===== Settings panel (slide-in drawer) ===== */

@@ -7,6 +7,11 @@ import python from 'highlight.js/lib/languages/python'
 import bash from 'highlight.js/lib/languages/bash'
 import json from 'highlight.js/lib/languages/json'
 import yaml from 'highlight.js/lib/languages/yaml'
+import xml from 'highlight.js/lib/languages/xml'
+import css from 'highlight.js/lib/languages/css'
+import diff from 'highlight.js/lib/languages/diff'
+import sql from 'highlight.js/lib/languages/sql'
+import markdown from 'highlight.js/lib/languages/markdown'
 import { copyText, escHtml } from './utils.ts'
 
 // Register language subset to minimise bundle size
@@ -22,6 +27,15 @@ hljs.registerLanguage('sh',         bash)
 hljs.registerLanguage('json',       json)
 hljs.registerLanguage('yaml',       yaml)
 hljs.registerLanguage('yml',        yaml)
+hljs.registerLanguage('xml',        xml)
+hljs.registerLanguage('html',       xml)
+hljs.registerLanguage('svg',        xml)
+hljs.registerLanguage('css',        css)
+hljs.registerLanguage('diff',       diff)
+hljs.registerLanguage('patch',      diff)
+hljs.registerLanguage('sql',        sql)
+hljs.registerLanguage('markdown',   markdown)
+hljs.registerLanguage('md',         markdown)
 
 // Lines threshold above which a code block gets a "Show all" expand button
 const FOLD_LINES = 20
@@ -32,13 +46,42 @@ function nextId(): string {
   return `cb-${++blockId}`
 }
 
+function normalizeLanguage(lang: string | undefined): string | undefined {
+  const normalized = (lang ?? '').trim().toLowerCase()
+  if (!normalized) return undefined
+
+  const aliases: Record<string, string> = {
+    shell: 'bash',
+    console: 'bash',
+    terminal: 'bash',
+    zsh: 'bash',
+    sh: 'bash',
+    node: 'javascript',
+    cjs: 'javascript',
+    mjs: 'javascript',
+    jsx: 'javascript',
+    tsx: 'typescript',
+    ht: 'html',
+    xhtml: 'html',
+    yml: 'yaml',
+    mdx: 'markdown',
+  }
+  return aliases[normalized] ?? normalized
+}
+
 function highlightCode(code: string, lang: string | undefined): string {
-  if (lang && hljs.getLanguage(lang)) {
+  const normalizedLanguage = normalizeLanguage(lang)
+  if (normalizedLanguage && hljs.getLanguage(normalizedLanguage)) {
     try {
-      return hljs.highlight(code, { language: lang }).value
+      return hljs.highlight(code, { language: normalizedLanguage }).value
     } catch { /* ignore highlight errors */ }
   }
-  return escHtml(code)
+
+  try {
+    return hljs.highlightAuto(code).value
+  } catch {
+    return escHtml(code)
+  }
 }
 
 marked.use({
@@ -51,7 +94,7 @@ marked.use({
     code(code: string, language: string | undefined): string {
       const id          = nextId()
       const highlighted = highlightCode(code, language)
-      const langLabel   = language ? escHtml(language) : '文本'
+      const langLabel   = language ? escHtml(language) : 'auto'
       const lineCount   = code.split('\n').length
       const needsFold   = lineCount > FOLD_LINES
       const expandBtn   = needsFold

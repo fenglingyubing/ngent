@@ -588,6 +588,21 @@ function isNearBottom(el: HTMLElement): boolean {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 100
 }
 
+function syncScrollBottomButton(listEl: HTMLElement): void {
+  const scrollBtn = document.getElementById('scroll-bottom-btn')
+  if (scrollBtn) scrollBtn.style.display = isNearBottom(listEl) ? 'none' : ''
+}
+
+function restoreMessageListScroll(listEl: HTMLElement, stickToBottom: boolean, previousScrollTop: number): void {
+  if (stickToBottom) {
+    listEl.scrollTop = listEl.scrollHeight
+  } else {
+    const maxScrollTop = Math.max(listEl.scrollHeight - listEl.clientHeight, 0)
+    listEl.scrollTop = Math.min(previousScrollTop, maxScrollTop)
+  }
+  syncScrollBottomButton(listEl)
+}
+
 // ── Message store helpers ─────────────────────────────────────────────────
 
 function addMessageToStore(scopeKey: string, msg: Message): void {
@@ -635,6 +650,14 @@ function activateThread(threadId: string): void {
     activeThreadId: threadId,
     threadCompletionBadges: nextThreadCompletionBadges,
   })
+}
+
+function resolveActiveThreadId(threads: Thread[], currentActiveThreadId: string | null): string | null {
+  if (!threads.length) return null
+  if (currentActiveThreadId && threads.some(thread => thread.threadId === currentActiveThreadId)) {
+    return currentActiveThreadId
+  }
+  return threads[0]?.threadId ?? null
 }
 
 function resetThreadActionMenuState(): boolean {
@@ -1228,13 +1251,23 @@ function renderSessionItem(item: SessionInfo, active: boolean, loading: boolean)
     </button>`
 }
 
-function renderSessionPanel(): string {
+function renderSessionPanel(mode: 'desktop' | 'mobile' = 'desktop'): string {
   const { activeThreadId, threads, streamStates } = store.get()
   const thread = activeThreadId ? threads.find(item => item.threadId === activeThreadId) : null
+  const mobileCloseButton = mode === 'mobile'
+    ? `<button
+        class="btn btn-icon mobile-session-close-btn"
+        type="button"
+        title="关闭会话列表"
+        aria-label="关闭会话列表">
+        ${iconClose}
+      </button>`
+    : ''
   if (!thread) {
     return `
       <div class="session-panel-header">
         <h3 class="session-panel-title">会话</h3>
+        ${mobileCloseButton}
       </div>
       <div class="session-panel-empty">请选择一个 Agent 以浏览 ACP 会话。</div>`
   }
@@ -1306,6 +1339,7 @@ function renderSessionPanel(): string {
           ${disabled ? 'disabled' : ''}>
           ${iconPlus}
         </button>
+        ${mobileCloseButton}
       </div>
     </div>
     <div class="session-panel-body">
@@ -1313,21 +1347,19 @@ function renderSessionPanel(): string {
     </div>`
 }
 
-function updateSessionPanel(): void {
-  const el = document.getElementById('session-sidebar')
-  if (!el) return
-
+function syncSessionPanel(el: HTMLElement, mode: 'desktop' | 'mobile'): void {
   const renderedThreadID = el.dataset.threadId?.trim() ?? ''
   const previousBody = el.querySelector<HTMLElement>('.session-panel-body')
   if (renderedThreadID && previousBody) {
     sessionPanelScrollTopByThread.set(renderedThreadID, previousBody.scrollTop)
   }
 
-  el.innerHTML = renderSessionPanel()
+  el.innerHTML = renderSessionPanel(mode)
   const { activeThreadId, threads } = store.get()
   const thread = activeThreadId ? threads.find(item => item.threadId === activeThreadId) : null
   if (!thread) {
     delete el.dataset.threadId
+    el.querySelector<HTMLButtonElement>('.mobile-session-close-btn')?.addEventListener('click', closeMobileSessionOverlay)
     return
   }
 
@@ -1347,6 +1379,7 @@ function updateSessionPanel(): void {
   })
 
   el.querySelector<HTMLButtonElement>('.session-new-btn')?.addEventListener('click', () => {
+    if (mode === 'mobile') closeMobileSessionOverlay()
     void switchThreadSession(thread, '')
   })
 
@@ -1354,6 +1387,7 @@ function updateSessionPanel(): void {
     btn.addEventListener('click', () => {
       const sessionID = btn.dataset.sessionId?.trim() ?? ''
       if (!sessionID || sessionID === threadSessionID(thread)) return
+      if (mode === 'mobile') closeMobileSessionOverlay()
       void switchThreadSession(thread, sessionID)
     })
   })
@@ -1361,6 +1395,16 @@ function updateSessionPanel(): void {
   el.querySelector<HTMLButtonElement>('.session-show-more-btn')?.addEventListener('click', () => {
     void loadThreadSessions(thread.threadId, true)
   })
+
+  el.querySelector<HTMLButtonElement>('.mobile-session-close-btn')?.addEventListener('click', closeMobileSessionOverlay)
+}
+
+function updateSessionPanel(): void {
+  const desktopEl = document.getElementById('session-sidebar')
+  if (desktopEl) syncSessionPanel(desktopEl, 'desktop')
+
+  const mobileEl = document.getElementById('mobile-session-panel')
+  if (mobileEl) syncSessionPanel(mobileEl, 'mobile')
 }
 
 // ── Thread list rendering ─────────────────────────────────────────────────
@@ -1805,7 +1849,7 @@ function updateThreadList(): void {
       const id = item.dataset.threadId ?? ''
       activateThread(id)
       // Close mobile sidebar on thread select
-      document.getElementById('sidebar')?.classList.remove('sidebar--open')
+      closeMobileSidebar()
     }
     item.addEventListener('click', handler)
     item.addEventListener('keydown', e => {
@@ -2692,6 +2736,9 @@ function updateMessageList(): void {
   const { activeThreadId, threads, messages } = store.get()
   if (!activeThreadId) return
 
+  const previousScrollTop = listEl.scrollTop
+  const stickToBottom = !listEl.childElementCount || isNearBottom(listEl)
+
   const thread   = threads.find(t => t.threadId === activeThreadId)
   const scopeKey = threadChatScopeKey(thread)
   const msgs     = messages[scopeKey] ?? []
@@ -2704,6 +2751,7 @@ function updateMessageList(): void {
         <h3 class="empty-state-title" style="font-size:var(--font-size-lg)">开始对话</h3>
         <p class="empty-state-desc">发送第一条消息，开始与 ${escHtml(thread?.agent ?? '该 Agent')} 协作。</p>
       </div>`
+    syncScrollBottomButton(listEl)
     return
   }
 
@@ -2711,10 +2759,7 @@ function updateMessageList(): void {
   bindMarkdownControls(listEl)
   bindReasoningPanels(listEl)
   bindAttachmentCards(listEl)
-  listEl.scrollTop = listEl.scrollHeight
-  // Sync scroll button (we just moved to the bottom)
-  const scrollBtn = document.getElementById('scroll-bottom-btn')
-  if (scrollBtn) scrollBtn.style.display = 'none'
+  restoreMessageListScroll(listEl, stickToBottom, previousScrollTop)
 }
 
 // ── Input state ───────────────────────────────────────────────────────────
@@ -3010,6 +3055,7 @@ function renderChatThread(t: Thread): string {
   )
   const showReasoningSwitch = shouldShowReasoningSwitch(reasoningOption)
   const isSwitching = threadConfigSwitching.has(t.threadId)
+  const isSwitchingSession = sessionSwitchingThreads.has(t.threadId)
   const pendingUploads = pendingUploadsByThread.get(t.threadId) ?? []
   const uploadBusy = uploadInFlightThreads.has(t.threadId)
   const storageUsage = store.get().storageUsage
@@ -3024,6 +3070,24 @@ function renderChatThread(t: Thread): string {
             <span class="badge badge--agent">${escHtml(t.agent ?? '')}</span>
           </div>
           ${renderStorageUsageIndicator(storageUsage)}
+          <div class="mobile-session-actions">
+            <button
+              class="btn btn-ghost btn-sm mobile-session-list-btn"
+              id="mobile-session-list-btn"
+              type="button"
+              aria-label="查看会话列表">
+              <span>会话</span>
+            </button>
+            <button
+              class="btn btn-ghost btn-sm mobile-session-new-btn"
+              id="mobile-new-session-btn"
+              type="button"
+              aria-label="新建会话"
+              ${isSwitchingSession ? 'disabled' : ''}>
+              ${iconPlus}
+              <span>新会话</span>
+            </button>
+          </div>
         </div>
       </div>
       <div class="chat-header-right">
@@ -3097,14 +3161,14 @@ function updateChatArea(): void {
     chat.innerHTML = renderChatEmpty()
     document.getElementById('new-thread-empty-btn')?.addEventListener('click', openNewThread)
     document.querySelector('.mobile-menu-btn')?.addEventListener('click', () => {
-      document.getElementById('sidebar')?.classList.toggle('sidebar--open')
+      toggleMobileSidebar()
     })
     return
   }
 
   chat.innerHTML = renderChatThread(thread)
   document.querySelector('.mobile-menu-btn')?.addEventListener('click', () => {
-    document.getElementById('sidebar')?.classList.toggle('sidebar--open')
+    toggleMobileSidebar()
   })
 
   // Show locally loaded messages immediately (including empty threads).
@@ -3132,10 +3196,21 @@ function updateChatArea(): void {
   bindCancelHandler()
   bindThreadConfigSwitches(thread)
   bindScrollBottom()
+  bindMobileSessionActions(thread)
   restoreComposerDraft(thread.threadId)
 
   // Always reload history from server (keeps view fresh; guards against overwrites during streaming)
   void loadHistory(thread.threadId)
+}
+
+function bindMobileSessionActions(thread: Thread): void {
+  document.getElementById('mobile-session-list-btn')?.addEventListener('click', () => {
+    openMobileSessionOverlay()
+    updateSessionPanel()
+  })
+  document.getElementById('mobile-new-session-btn')?.addEventListener('click', () => {
+    void switchThreadSession(thread, '')
+  })
 }
 
 function resizeComposerInput(input: HTMLTextAreaElement): void {
@@ -3414,14 +3489,13 @@ function bindScrollBottom(): void {
   const btnEl  = document.getElementById('scroll-bottom-btn') as HTMLButtonElement | null
   if (!listEl || !btnEl) return
 
-  const syncBtn = () => {
-    btnEl.style.display = isNearBottom(listEl) ? 'none' : ''
-  }
+  const syncBtn = () => syncScrollBottomButton(listEl)
 
   listEl.addEventListener('scroll', syncBtn, { passive: true })
   btnEl.addEventListener('click', () => {
     listEl.scrollTo({ top: listEl.scrollHeight, behavior: 'smooth' })
   })
+  syncBtn()
 }
 
 // ── Input resize ──────────────────────────────────────────────────────────
@@ -3857,6 +3931,34 @@ function openNewThread(): void {
   newThreadModal.open()
 }
 
+function openMobileSidebar(): void {
+  document.getElementById('sidebar')?.classList.add('sidebar--open')
+  document.getElementById('mobile-sidebar-backdrop')?.removeAttribute('hidden')
+}
+
+function closeMobileSidebar(): void {
+  document.getElementById('sidebar')?.classList.remove('sidebar--open')
+  document.getElementById('mobile-sidebar-backdrop')?.setAttribute('hidden', 'true')
+}
+
+function toggleMobileSidebar(): void {
+  const sidebar = document.getElementById('sidebar')
+  if (!sidebar) return
+  if (sidebar.classList.contains('sidebar--open')) {
+    closeMobileSidebar()
+  } else {
+    openMobileSidebar()
+  }
+}
+
+function openMobileSessionOverlay(): void {
+  document.getElementById('mobile-session-overlay')?.removeAttribute('hidden')
+}
+
+function closeMobileSessionOverlay(): void {
+  document.getElementById('mobile-session-overlay')?.setAttribute('hidden', 'true')
+}
+
 // ── Static layout shell ───────────────────────────────────────────────────
 
 function renderShell(): void {
@@ -3865,6 +3967,14 @@ function renderShell(): void {
 
   root.innerHTML = `
     <div class="layout">
+      <button class="mobile-sidebar-backdrop" id="mobile-sidebar-backdrop" type="button" aria-label="关闭侧边栏" hidden></button>
+      <div class="mobile-session-overlay" id="mobile-session-overlay" hidden>
+        <button class="mobile-session-overlay-backdrop" id="mobile-session-overlay-backdrop" type="button" aria-label="关闭会话列表"></button>
+        <div class="mobile-session-sheet">
+          <div class="mobile-session-panel" id="mobile-session-panel"></div>
+        </div>
+      </div>
+
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-header">
           <div class="sidebar-brand">
@@ -3978,34 +4088,41 @@ function bindGlobalShortcuts(): void {
         closeAttachmentPreview()
         return
       }
-      // (2) close mobile sidebar if open
-      const sidebar = document.getElementById('sidebar')
-      if (sidebar?.classList.contains('sidebar--open')) {
-        sidebar.classList.remove('sidebar--open')
+      // (2) close mobile session overlay if open
+      const mobileSessionOverlay = document.getElementById('mobile-session-overlay')
+      if (mobileSessionOverlay && !mobileSessionOverlay.hidden) {
+        e.preventDefault()
+        closeMobileSessionOverlay()
         return
       }
-      // (3) close thread action menu if open
+      // (3) close mobile sidebar if open
+      const sidebar = document.getElementById('sidebar')
+      if (sidebar?.classList.contains('sidebar--open')) {
+        closeMobileSidebar()
+        return
+      }
+      // (4) close thread action menu if open
       if (openThreadActionMenuId) {
         e.preventDefault()
         resetThreadActionMenuState()
         updateThreadList()
         return
       }
-      // (4) close slash command menu if open
+      // (5) close slash command menu if open
       const slashCommandMenu = document.getElementById('slash-command-menu') as HTMLDivElement | null
       if (slashCommandMenu && !slashCommandMenu.hidden) {
         e.preventDefault()
         closeSlashCommandMenu()
         return
       }
-      // (5) close session info popover if open
+      // (6) close session info popover if open
       const sessionInfoPanel = document.getElementById('session-info-panel')
       if (sessionInfoPanel && !sessionInfoPanel.hidden) {
         e.preventDefault()
         closeSessionInfoPopover()
         return
       }
-      // (6) clear search if focused
+      // (7) clear search if focused
       const searchEl = document.getElementById('search-input') as HTMLInputElement | null
       if (searchEl && document.activeElement === searchEl) {
         searchEl.value = ''
@@ -4013,7 +4130,7 @@ function bindGlobalShortcuts(): void {
         searchEl.blur()
         return
       }
-      // (7) cancel active stream
+      // (8) cancel active stream
       const streamState = getActiveChatStreamState()
       if (streamState?.turnId) {
         void handleCancel()
@@ -4048,6 +4165,13 @@ async function init(): Promise<void> {
     if (target?.closest('.thread-item-menu-trigger') || target?.closest('.thread-action-popover')) return
     resetThreadActionMenuState()
     updateThreadList()
+  })
+
+  document.getElementById('mobile-sidebar-backdrop')?.addEventListener('click', () => {
+    closeMobileSidebar()
+  })
+  document.getElementById('mobile-session-overlay-backdrop')?.addEventListener('click', () => {
+    closeMobileSessionOverlay()
   })
 
   store.subscribe(() => {
@@ -4088,7 +4212,12 @@ async function init(): Promise<void> {
       api.getThreads(),
       api.getStorageUsage(),
     ])
-    store.set({ agents, threads, storageUsage })
+    store.set({
+      agents,
+      threads,
+      storageUsage,
+      activeThreadId: resolveActiveThreadId(threads, store.get().activeThreadId),
+    })
   } catch {
     const el = document.getElementById('thread-list')
     if (el) {

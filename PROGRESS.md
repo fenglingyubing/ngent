@@ -11,7 +11,53 @@ This file is the source of milestone progress, validation commands, and next act
 
 - `Post-M8` ACP multi-agent readiness and maintenance.
 
-## Latest Update (2026-03-17)
+## Latest Update (2026-03-18)
+
+- `Post-M8` markdown code blocks now recover syntax highlighting for common model fence labels:
+  - expanded the Web UI highlight.js language set and added alias normalization for labels such as `shell`, `tsx`, `jsx`, `html`, and `mdx`, which models emit frequently but were previously outside the narrow registered subset.
+  - added automatic highlight fallback for unlabeled or unknown fenced code blocks so they no longer render as plain text when the model omits an exact registered language name.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `PATH=/usr/local/go/bin:$PATH go test ./...`
+
+- `Post-M8` streaming chat no longer yanks scroll position on completion:
+  - preserved the message-list scroll position across finalized message re-renders, so if a user scrolls away from the live tail while the model is still streaming, the completion pass no longer forces the viewport back to the bottom.
+  - widened the live streaming bubble shell to match the final agent bubble container immediately instead of waiting for the completion-time markdown re-render.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `PATH=/usr/local/go/bin:$PATH go test ./...`
+
+- `Post-M8` mobile picker layout hardened with single-column grid:
+  - strengthened the mobile composer picker container from a soft flex stack to a one-column grid and removed lingering shrink behavior from the picker items, so long model names cannot push the reasoning-strength selector off-screen.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `PATH=/usr/local/go/bin:$PATH go test ./...`
+
+- `Post-M8` mobile model/reasoning pickers now stack vertically:
+  - changed the mobile composer picker row to a full-width vertical stack so long model names can no longer squeeze the reasoning-strength selector off-screen.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `PATH=/usr/local/go/bin:$PATH go test ./...`
+
+- `Post-M8` mobile session list shortcut added:
+  - the mobile chat header now exposes a `会话` button that opens a bottom-sheet session list, reusing the same refresh/new/switch session logic as the desktop right-side session panel.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `PATH=/usr/local/go/bin:$PATH go test ./...`
+
+- `Post-M8` mobile sidebar dismissal and fresh-session visibility refined:
+  - added a real mobile sidebar backdrop so tapping the dimmed chat area now closes the drawer instead of leaving the sidebar stuck open until another explicit control is used.
+  - moved the mobile `新会话` action into the chat-header main area so it remains visible on phone layouts instead of competing with the header's secondary controls.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `PATH=/usr/local/go/bin:$PATH go test ./...`
+
+- `Post-M8` Web UI refresh recovery and mobile session access fixed:
+  - the SPA now auto-activates the newest available thread after a full page reload when runtime-only `activeThreadId` state is empty, so refresh no longer drops users back onto the empty "未选择 Agent" screen while threads already exist.
+  - added a mobile chat-header `新会话` action so phone users can start a fresh session even when the desktop-only right-side session panel is hidden by responsive layout rules.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: `PATH=/usr/local/go/bin:$PATH go test ./...`
 
 - `Post-M8` Web UI mobile chat layout refined for phone screens:
   - tightened the mobile header and empty state, added safe-area-aware spacing, reduced wasted vertical space, and switched the composer controls to a stacked touch-first layout on narrow screens.

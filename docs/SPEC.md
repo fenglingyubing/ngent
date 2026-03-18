@@ -691,3 +691,82 @@ and upstream ACP schema:
 
 - the current mobile optimization does not introduce a separate JavaScript drawer/backdrop system for the sidebar.
 - desktop layout behavior and streaming/chat protocol semantics remain unchanged.
+
+## 21. Thread Recovery On Reload And Mobile Fresh-Session Shortcut (2026-03-17)
+
+### 21.1 Reload Recovery
+
+- `activeThreadId` remains runtime-only browser state and is not persisted in `localStorage`.
+- after the initial `GET /v1/threads` completes, the Web UI derives the active thread as follows:
+  - keep the current `activeThreadId` if it still exists in the returned thread list
+  - otherwise select the first thread returned by the server
+  - if no threads exist, leave `activeThreadId = null`
+- this keeps reload behavior usable without widening persisted browser runtime state.
+
+### 21.2 Mobile Fresh-Session Action
+
+- when a thread is active, mobile chat header UI exposes a dedicated `新会话` action.
+- the action invokes the same fresh-session/session-reset path used by the desktop session panel's `新建会话` button.
+- desktop behavior remains unchanged; the mobile action is additive and exists because the right-side session panel is hidden at mobile breakpoints.
+
+### 21.3 Mobile Drawer Dismissal
+
+- at mobile breakpoints, opening the sidebar drawer also reveals a dedicated backdrop element over the remaining chat surface.
+- tapping that backdrop closes the drawer.
+- the mobile `新会话` action is positioned in the header's primary content column rather than the secondary action cluster so it stays visible on narrow screens.
+
+### 21.4 Mobile Session List
+
+- when a thread is active, mobile chat header UI also exposes a `会话` action.
+- that action opens a bottom-sheet session list rendered from the same session-panel content used by the desktop right-side panel.
+- mobile presentation adds only close/backdrop affordances; refresh, new session, pagination, and session switching semantics remain shared with desktop.
+
+## 22. Streaming Scroll Preservation And Bubble Shell (2026-03-18)
+
+### 22.1 Completion Re-Render Scroll Policy
+
+- `updateMessageList()` must not assume every message-list re-render should snap to the bottom.
+- before replacing the list DOM, the Web UI captures:
+  - the current `scrollTop`
+  - whether the viewer is already near the bottom
+- after render:
+  - if the viewer was near the bottom, the list snaps to the bottom as before
+  - otherwise the previous `scrollTop` is restored, preserving the reader's place while the completed message is swapped in
+
+### 22.2 Streaming Bubble Shell
+
+- the in-progress agent bubble is still plain-text only during streaming; markdown rendering remains deferred until the final completed message render.
+- however, the streaming bubble now occupies the same full bubble shell width as the finalized agent bubble container, so the response frame appears immediately instead of looking shrink-wrapped until completion.
+
+## 23. Markdown Highlighting Alias And Fallback Policy (2026-03-18)
+
+### 23.1 Language Resolution
+
+- finalized agent markdown code blocks are rendered through `marked` plus `highlight.js`.
+- before invoking highlight.js, the Web UI normalizes common fence labels that models emit but users do not control, including:
+  - `shell` / `console` / `terminal` / `zsh` -> `bash`
+  - `jsx` -> `javascript`
+  - `tsx` -> `typescript`
+  - `xhtml` -> `html`
+  - `mdx` -> `markdown`
+
+### 23.2 Registered Browser Grammars
+
+- the embedded Web UI ships explicit highlighters for:
+  - `go`
+  - `typescript` / `ts`
+  - `javascript` / `js`
+  - `python` / `py`
+  - `bash` / `sh`
+  - `json`
+  - `yaml` / `yml`
+  - `xml` / `html` / `svg`
+  - `css`
+  - `diff` / `patch`
+  - `sql`
+  - `markdown` / `md`
+
+### 23.3 Fallback
+
+- if a fenced code block has no language or the normalized language is still unknown, the Web UI uses `highlightAuto` as a best-effort fallback.
+- if highlight.js still fails, the code block falls back to escaped plain text rather than raw HTML.
