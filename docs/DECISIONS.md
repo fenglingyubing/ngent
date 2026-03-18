@@ -61,6 +61,30 @@
 - ADR-057: Reuse the desktop session panel logic inside a mobile bottom sheet. (Accepted)
 - ADR-058: Preserve user scroll position across streaming completion and render the live bubble with final shell dimensions. (Accepted)
 - ADR-059: Normalize common markdown fence labels and auto-detect unknown code blocks for Web UI highlighting. (Accepted)
+- ADR-060: Align the Web UI shell with the provided ChatGPT-style prototype while keeping Ngent features intact. (Accepted)
+
+## ADR-060: Align The Web UI Shell With The Provided ChatGPT-Style Prototype While Keeping Ngent Features Intact
+
+- Status: Accepted
+- Date: 2026-03-18
+- Context:
+  - the repository now has a concrete prototype (`index.html`) that defines the desired visual direction more explicitly than the earlier generic SPA shell.
+  - the embedded Web UI still needs to preserve Ngent-specific capabilities such as session browsing, config pickers, storage indicators, and attachment uploads.
+  - the earlier desktop layout used a permanent right-side session panel and denser sidebar cards, which no longer matched the requested prototype.
+- Decision:
+  - restyle the SPA around the prototype's visual hierarchy: dark conversation rail on the left, bright centered chat canvas, plain-text assistant replies, light-gray user bubbles, and a floating rounded composer.
+  - regroup sidebar threads by recency (`今天`, `前 7 天`, `更早`) and simplify each row to a conversation-like single-line entry.
+  - hide the always-open desktop session sidebar and reuse the existing overlay sheet for session browsing on both desktop and mobile so the main canvas stays prototype-faithful.
+  - keep Ngent-specific controls, but compress them into the header/composer so model/reasoning/session features remain available without breaking the prototype layout.
+- Consequences:
+  - the default Web UI now feels much closer to the supplied prototype while preserving existing runtime capabilities.
+  - session access becomes one click deeper on desktop because it now opens in an overlay instead of staying permanently visible.
+  - future visual tweaks should treat the prototype-aligned shell as the baseline rather than the earlier utilitarian sidebar/chat split.
+- Alternatives considered:
+  - keep the old desktop session sidebar and only recolor the UI.
+  - clone the prototype literally and hide Ngent-specific controls behind separate settings pages.
+- Follow-up actions:
+  - validate the shell against a real running ngent server on a host with Go available, not only mocked browser routes.
 
 ## ADR-053: Extract OCR Text From Image Attachments Before Model Turns
 

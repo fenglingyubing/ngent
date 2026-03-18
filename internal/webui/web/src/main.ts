@@ -29,7 +29,7 @@ import type {
   SessionBoundPayload,
   ToolCallPayload,
 } from './sse.ts'
-import { copyText, escHtml, formatRelativeTime, formatTimestamp, generateUUID } from './utils.ts'
+import { copyText, escHtml, formatTimestamp, generateUUID } from './utils.ts'
 
 // ── Theme ─────────────────────────────────────────────────────────────────
 
@@ -46,6 +46,10 @@ const iconPlus = `<svg width="15" height="15" viewBox="0 0 15 15" fill="none" ar
 
 const iconSend = `<svg width="14" height="14" viewBox="0 0 15 15" fill="none" aria-hidden="true">
   <path d="M1.5 7.5h12M8.5 2l5 5.5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`
+
+const iconAttachment = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+  <path d="M21.44 11.05 12.25 20.24a6 6 0 1 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.19 9.19a2 2 0 0 1-2.83-2.83l8.49-8.49" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`
 
 const iconSettings = `<svg width="14" height="14" viewBox="0 0 15 15" fill="none" aria-hidden="true">
@@ -1425,6 +1429,45 @@ function threadTitle(t: Thread): string {
   return t.cwd.split('/').filter(Boolean).pop() ?? t.cwd
 }
 
+interface ThreadListGroup {
+  label: string
+  items: Thread[]
+}
+
+function threadSortTimestamp(t: Thread): number {
+  const raw = t.updatedAt || t.createdAt || ''
+  const time = raw ? Date.parse(raw) : Number.NaN
+  return Number.isFinite(time) ? time : 0
+}
+
+function buildThreadListGroups(threads: Thread[]): ThreadListGroup[] {
+  const todayBoundary = new Date()
+  todayBoundary.setHours(0, 0, 0, 0)
+  const weekBoundary = new Date(todayBoundary)
+  weekBoundary.setDate(weekBoundary.getDate() - 7)
+
+  const groups: ThreadListGroup[] = [
+    { label: '今天', items: [] },
+    { label: '前 7 天', items: [] },
+    { label: '更早', items: [] },
+  ]
+
+  for (const thread of threads) {
+    const timestamp = threadSortTimestamp(thread)
+    if (timestamp >= todayBoundary.getTime()) {
+      groups[0].items.push(thread)
+      continue
+    }
+    if (timestamp >= weekBoundary.getTime()) {
+      groups[1].items.push(thread)
+      continue
+    }
+    groups[2].items.push(thread)
+  }
+
+  return groups.filter(group => group.items.length)
+}
+
 type ConfigPickerState = 'loading' | 'empty' | 'ready'
 
 interface ConfigPickerOption {
@@ -1762,9 +1805,7 @@ function renderThreadItem(
 ): string {
   const isActive = t.threadId === activeId
   const isMenuOpen = openThreadActionMenuId === t.threadId
-  const avatar = renderAgentAvatar(t.agent ?? '', 'thread')
   const displayTitle = threadTitle(t)
-  const relTime = t.updatedAt ? formatRelativeTime(t.updatedAt) : ''
 
   const titleHtml = query
     ? escHtml(displayTitle).replace(
@@ -1779,14 +1820,8 @@ function renderThreadItem(
          role="button"
          tabindex="0"
          aria-label="${escHtml(displayTitle)}">
-      <div class="thread-item-avatar ${isActive ? '' : 'thread-item-avatar--inactive'}">${avatar}</div>
       <div class="thread-item-body">
         <div class="thread-item-title">${titleHtml}</div>
-        <div class="thread-item-preview">${escHtml(t.cwd)}</div>
-        <div class="thread-item-foot">
-          <span class="badge badge--agent">${escHtml(t.agent ?? '')}</span>
-          <span class="thread-item-time">${relTime}</span>
-        </div>
       </div>
       <div class="thread-item-actions">
         ${renderThreadStatusIndicator(activityIndicator)}
@@ -1821,15 +1856,25 @@ function updateThreadList(): void {
     return
   }
 
-  el.innerHTML = filtered
-    .map(t => {
-      const isActive = t.threadId === activeThreadId
-      const activityIndicator: ThreadActivityIndicator = Object.values(streamStates).some(streamState => streamState.threadId === t.threadId)
-        ? 'loading'
-        : (!isActive && threadCompletionBadges[t.threadId] ? 'done' : null)
-      return renderThreadItem(t, activeThreadId, q, activityIndicator)
-    })
-    .join('')
+  const renderThreadCard = (thread: Thread): string => {
+    const isActive = thread.threadId === activeThreadId
+    const activityIndicator: ThreadActivityIndicator = Object.values(streamStates).some(streamState => streamState.threadId === thread.threadId)
+      ? 'loading'
+      : (!isActive && threadCompletionBadges[thread.threadId] ? 'done' : null)
+    return renderThreadItem(thread, activeThreadId, q, activityIndicator)
+  }
+
+  if (q) {
+    el.innerHTML = filtered.map(renderThreadCard).join('')
+  } else {
+    el.innerHTML = buildThreadListGroups(filtered)
+      .map(group => `
+        <section class="thread-group" aria-label="${escHtml(group.label)}">
+          <h3 class="thread-group-title">${escHtml(group.label)}</h3>
+          <div class="thread-group-list">${group.items.map(renderThreadCard).join('')}</div>
+        </section>`)
+      .join('')
+  }
 
   el.querySelectorAll<HTMLButtonElement>('.thread-item-menu-trigger').forEach(btn => {
     btn.addEventListener('click', e => {
@@ -2935,13 +2980,13 @@ function selectSlashCommand(commandName: string): void {
 function renderChatEmpty(): string {
   return `
     <div class="empty-state">
-      <div class="empty-state-icon">◈</div>
-      <h3 class="empty-state-title">未选择 Agent</h3>
+      <div class="empty-state-icon">N</div>
+      <h3 class="empty-state-title">开始一个新对话</h3>
       <p class="empty-state-desc">
-        从侧边栏选择一个 Agent，或新建一个开始对话。
+        从左侧选择已有会话，或直接新建一个工作线程开始协作。
       </p>
       <button class="btn btn-primary" id="new-thread-empty-btn">
-        ${iconPlus} 新建 Agent
+        ${iconPlus} 新建对话
       </button>
     </div>`
 }
@@ -3059,41 +3104,50 @@ function renderChatThread(t: Thread): string {
   const pendingUploads = pendingUploadsByThread.get(t.threadId) ?? []
   const uploadBusy = uploadInFlightThreads.has(t.threadId)
   const storageUsage = store.get().storageUsage
+  const headerModelLabel = (
+    modelPickerData.state === 'loading'
+      ? fallbackThreadModelID(t)
+      : modelPickerData.selectedLabel
+  ) || t.agent || 'Agent'
 
   return `
     <div class="chat-header">
-      <div class="chat-header-left">
-        <button class="btn btn-icon mobile-menu-btn" aria-label="打开菜单">${iconMenu}</button>
-        <div class="chat-header-main">
-          <div class="chat-header-title-row">
-            <h2 class="chat-title" title="${escHtml(titleLabel)}">${escHtml(titleLabel)}</h2>
-            <span class="badge badge--agent">${escHtml(t.agent ?? '')}</span>
-          </div>
-          ${renderStorageUsageIndicator(storageUsage)}
-          <div class="mobile-session-actions">
-            <button
-              class="btn btn-ghost btn-sm mobile-session-list-btn"
-              id="mobile-session-list-btn"
-              type="button"
-              aria-label="查看会话列表">
-              <span>会话</span>
-            </button>
-            <button
-              class="btn btn-ghost btn-sm mobile-session-new-btn"
-              id="mobile-new-session-btn"
-              type="button"
-              aria-label="新建会话"
-              ${isSwitchingSession ? 'disabled' : ''}>
-              ${iconPlus}
-              <span>新会话</span>
-            </button>
+      <div class="chat-header-bar">
+        <div class="chat-header-left">
+          <button class="btn btn-icon mobile-menu-btn" aria-label="打开菜单">${iconMenu}</button>
+          <div class="chat-header-main">
+            <div class="chat-header-title-row">
+              <button class="chat-model-pill" type="button" aria-label="当前模型">
+                <span class="chat-model-pill-label">${escHtml(headerModelLabel)}</span>
+                <span class="chat-model-pill-arrow" aria-hidden="true">▾</span>
+              </button>
+            </div>
+            <div class="chat-header-subtitle-row">
+              <span class="chat-thread-label" title="${escHtml(titleLabel)}">${escHtml(titleLabel)}</span>
+              ${createdLabel ? `<span class="chat-header-meta">${escHtml(createdLabel)}</span>` : ''}
+            </div>
+            ${renderStorageUsageIndicator(storageUsage)}
           </div>
         </div>
-      </div>
-      <div class="chat-header-right">
-        <button class="btn btn-sm btn-danger" id="cancel-btn" style="display:none" aria-label="取消当前轮次">取消</button>
-        <span class="chat-header-meta">${escHtml(createdLabel)}</span>
-        ${renderSessionInfoPopover(t)}
+        <div class="chat-header-right">
+          <button
+            class="btn btn-ghost btn-sm mobile-session-list-btn"
+            id="mobile-session-list-btn"
+            type="button"
+            aria-label="查看会话列表">
+            <span>会话</span>
+          </button>
+          <button
+            class="btn btn-icon mobile-session-new-btn"
+            id="mobile-new-session-btn"
+            type="button"
+            aria-label="新建会话"
+            ${isSwitchingSession ? 'disabled' : ''}>
+            ${iconPlus}
+          </button>
+          <button class="btn btn-sm btn-danger" id="cancel-btn" style="display:none" aria-label="取消当前轮次">取消</button>
+          ${renderSessionInfoPopover(t)}
+        </div>
       </div>
     </div>
 
@@ -3104,45 +3158,49 @@ function renderChatThread(t: Thread): string {
     </div>
 
     <div class="input-area">
-      <div class="slash-command-menu" id="slash-command-menu" hidden></div>
-      <div class="input-wrapper">
-        <input id="upload-input" type="file" multiple hidden />
-        <div class="pending-uploads ${pendingUploads.length ? '' : 'pending-uploads--empty'}" id="pending-uploads">
-          ${pendingUploads.length
-            ? pendingUploads.map(item => `
-              <div class="upload-chip upload-chip--${escHtml(item.kind)}" data-upload-id="${escHtml(item.uploadId)}">
-                <div class="upload-chip-copy">
-                  <span class="upload-chip-name">${escHtml(item.name)}</span>
-                  <span class="upload-chip-meta">${escHtml(formatBytes(item.sizeBytes))}</span>
+      <div class="input-area-shell">
+        <div class="slash-command-menu" id="slash-command-menu" hidden></div>
+        <div class="input-wrapper">
+          <input id="upload-input" type="file" multiple hidden />
+          <div class="pending-uploads ${pendingUploads.length ? '' : 'pending-uploads--empty'}" id="pending-uploads">
+            ${pendingUploads.length
+              ? pendingUploads.map(item => `
+                <div class="upload-chip upload-chip--${escHtml(item.kind)}" data-upload-id="${escHtml(item.uploadId)}">
+                  <div class="upload-chip-copy">
+                    <span class="upload-chip-name">${escHtml(item.name)}</span>
+                    <span class="upload-chip-meta">${escHtml(formatBytes(item.sizeBytes))}</span>
+                  </div>
+                  <button class="upload-chip-remove" type="button" data-remove-upload="${escHtml(item.uploadId)}" aria-label="移除附件">×</button>
                 </div>
-                <button class="upload-chip-remove" type="button" data-remove-upload="${escHtml(item.uploadId)}" aria-label="移除附件">×</button>
-              </div>
-            `).join('')
-            : `<div class="pending-uploads-placeholder">支持上传文件、拖拽文件或直接粘贴图片。</div>`}
-        </div>
-        <textarea
-          id="message-input"
-          class="message-input"
-          placeholder="输入消息…"
-          rows="1"
-          aria-label="消息输入"
-        ></textarea>
-        <div class="input-compose-bar">
-          <div class="thread-config-switches">
-            ${renderComposerConfigSwitch('model', '模型', modelPickerData, modelPickerLabels, isSwitching)}
-            ${showReasoningSwitch
-              ? renderComposerConfigSwitch('reasoning', '思考', reasoningPickerData, reasoningPickerLabels, isSwitching)
-              : ''}
+              `).join('')
+              : `<div class="pending-uploads-placeholder">支持上传文件、拖拽文件或直接粘贴图片。</div>`}
           </div>
-          <div class="composer-actions">
-            <button class="btn btn-ghost btn-upload" id="upload-btn" type="button" aria-label="上传附件" ${uploadBusy ? 'disabled' : ''}>上传</button>
+          <textarea
+            id="message-input"
+            class="message-input"
+            placeholder="给“${escHtml(headerModelLabel)}”发送消息..."
+            rows="1"
+            aria-label="消息输入"
+          ></textarea>
+          <div class="input-compose-bar">
+            <div class="compose-accessories">
+              <button class="btn btn-icon btn-upload" id="upload-btn" type="button" aria-label="上传附件" ${uploadBusy ? 'disabled' : ''}>
+                ${iconAttachment}
+              </button>
+              <div class="thread-config-switches">
+                ${renderComposerConfigSwitch('model', '模型', modelPickerData, modelPickerLabels, isSwitching)}
+                ${showReasoningSwitch
+                  ? renderComposerConfigSwitch('reasoning', '思考', reasoningPickerData, reasoningPickerLabels, isSwitching)
+                  : ''}
+              </div>
+            </div>
             <button class="btn btn-primary btn-send" id="send-btn" aria-label="发送消息">
               ${iconSend}
             </button>
           </div>
         </div>
+        <div class="input-hint">AI 可能会犯错。请核对重要信息。</div>
       </div>
-      <div class="input-hint">按 <kbd>⌘ Enter</kbd> 发送 · <kbd>Esc</kbd> 取消 · 输入 <kbd>/</kbd> 查看斜杠命令 · 支持拖拽与粘贴图片</div>
     </div>`
 }
 
@@ -3977,11 +4035,11 @@ function renderShell(): void {
 
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-header">
-          <div class="sidebar-brand">
-            <div class="sidebar-brand-icon">N</div>
-            <span>Ngent</span>
-          </div>
-          <button class="btn btn-icon" id="new-thread-btn" title="新建 Agent" aria-label="新建 Agent">
+          <button class="sidebar-new-thread-btn" id="new-thread-btn" title="新建对话" aria-label="新建对话">
+            <span class="sidebar-new-thread-copy">
+              <span class="sidebar-brand-icon">N</span>
+              <span>新对话</span>
+            </span>
             ${iconPlus}
           </button>
         </div>
@@ -3991,8 +4049,8 @@ function renderShell(): void {
             id="search-input"
             class="search-input"
             type="search"
-            placeholder="搜索 Agent…"
-            aria-label="搜索 Agent"
+            placeholder="搜索对话…"
+            aria-label="搜索对话"
           />
         </div>
 

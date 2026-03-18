@@ -13,6 +13,14 @@ This file is the source of milestone progress, validation commands, and next act
 
 ## Latest Update (2026-03-18)
 
+- `Post-M8` Web UI shell now mirrors the provided ChatGPT-style prototype more closely:
+  - restyled the embedded SPA around the prototype's dark left rail, white chat canvas, centered message column, light-gray user bubbles, and floating rounded composer.
+  - simplified thread rows into grouped conversation entries (`今天` / `前 7 天` / `更早`), moved desktop session access into the existing overlay flow, and aligned header/input treatments with the prototype while keeping existing Ngent features available.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: Playwright smoke via `with_server.py` + mocked `/v1/*` responses confirmed the prototype-aligned shell, composer color, and session overlay trigger/close flow
+    - blocked in current environment: `go test ./...` (`go` not installed or not in PATH)
+
 - `Post-M8` markdown code blocks now recover syntax highlighting for common model fence labels:
   - expanded the Web UI highlight.js language set and added alias normalization for labels such as `shell`, `tsx`, `jsx`, `html`, and `mdx`, which models emit frequently but were previously outside the narrow registered subset.
   - added automatic highlight fallback for unlabeled or unknown fenced code blocks so they no longer render as plain text when the model omits an exact registered language name.

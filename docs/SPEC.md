@@ -25,6 +25,16 @@ Modules:
 - `internal/storage`: SQLite repository and migration management.
 - `internal/observability`: structured JSON logging and redaction helpers.
 
+## 2A. Web UI Shell Direction
+
+- the embedded SPA follows a ChatGPT-like prototype shell captured in the repository `index.html`.
+- desktop layout baseline:
+  - dark left conversation rail with grouped thread sections.
+  - centered white chat canvas with plain-text assistant responses and light-gray user bubbles.
+  - floating rounded composer anchored to the bottom of the chat canvas.
+- Ngent-specific controls such as session browsing, model/reasoning pickers, uploads, and storage indicators remain present, but are folded into the header/composer instead of a persistent right-side desktop rail.
+- session browsing uses the overlay sheet pattern on both desktop and mobile so the main canvas stays visually consistent with the prototype.
+
 ## 3. Concurrency Model
 
 - `(thread, sessionId)` is the turn-execution isolation unit; empty `sessionId` is the backend's provisional "new session" state.

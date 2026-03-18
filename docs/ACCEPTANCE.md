@@ -103,6 +103,9 @@ This checklist defines executable acceptance checks for requirements 1-16.
 
 - Operation: start server; open browser at `http://127.0.0.1:8686/`.
 - Expected: UI loads, threads can be created, turns stream in real time, ACP plan/reasoning updates render as live agent-side sections, live reasoning shows `思考中`, finalized reasoning shows `思考过程`, finalized reasoning uses a lightweight inline toggle, renders markdown, and collapses by default, permissions can be resolved, and history is browsable.
+- Additional UI shell expectations:
+  - desktop defaults to a prototype-aligned shell with a dark left conversation rail, centered white chat canvas, plain-text assistant response layout, and a floating rounded composer.
+  - session browsing remains available through the overlay sheet instead of a permanently visible desktop right rail.
 - Verification command:
   - `go test ./internal/webui -count=1` (checks `GET /` returns 200 with `text/html` content-type and SPA fallback)
   - `go test ./internal/httpapi -run TestTurnsSSEIncludesReasoningAndPersistsHistory -count=1`
@@ -579,3 +582,19 @@ This checklist defines executable acceptance checks for requirements 1-16.
   - `cd internal/webui/web && npm run build`
   - `PATH=/usr/local/go/bin:$PATH go test ./...`
   - manual: ask the model for fenced `shell` and `tsx` code examples, confirm the final rendered code block contains colored syntax instead of a flat monospace block
+
+## Requirement 33: Prototype-Aligned Web UI Shell
+
+- Operation:
+  - open the embedded Web UI with at least one existing thread.
+  - compare the default shell against the supplied `index.html` prototype, including sidebar, header, message area, and composer.
+  - open and close the session overlay from the chat header.
+- Expected:
+  - the left rail uses the prototype's dark treatment and grouped conversation list styling.
+  - the main chat area uses a centered white canvas with light-gray user bubbles and plain-text assistant output.
+  - the composer uses a floating rounded light-gray shell with compact accessory controls.
+  - session browsing opens in an overlay sheet so the desktop canvas remains visually aligned with the prototype.
+- Verification commands (executed 2026-03-18):
+  - `cd internal/webui/web && npm run build`
+  - Playwright smoke via `with_server.py` and mocked `/v1/*` responses
+  - pending follow-up: `go test ./...` and live-server manual verification on a host with Go available

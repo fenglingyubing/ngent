@@ -15,6 +15,19 @@
 
 ## Open Issues
 
+- ID: KI-037
+- Title: Prototype-aligned shell still needs a full real-server visual pass on hosts with Go installed
+- Status: Open
+- Severity: Low
+- Affects: final acceptance of the new Web UI shell in environments where the embedded server cannot be launched locally
+- Symptom:
+  - the prototype-aligned shell was validated with frontend build output and Playwright using mocked `/v1/*` responses.
+  - the current workspace does not expose a runnable `go` binary, so the exact same visual pass could not yet be repeated against `go run ./cmd/ngent` in this environment.
+- Workaround:
+  - run `make run` or `go run ./cmd/ngent` on a host with Go 1.24 installed, then manually verify the embedded Web UI against a live server.
+- Follow-up plan:
+  - repeat the browser verification flow against the real embedded server once a Go-enabled host is available and close this issue if no layout drift appears.
+
 - ID: KI-036
 - Title: Mobile sidebar drawer still lacks a dedicated tap-backdrop dismiss layer
 - Status: Open
