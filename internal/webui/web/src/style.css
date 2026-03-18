@@ -3835,14 +3835,15 @@ body,
   padding: 4px 6px;
   color: #8e8ea0;
   opacity: 0;
+  pointer-events: none;
 }
 
 .thread-item:hover .thread-item-menu-trigger,
 .thread-item:focus-within .thread-item-menu-trigger,
-.thread-item--active .thread-item-menu-trigger,
 .thread-item--menu-open .thread-item-menu-trigger {
   opacity: 1;
   color: #ececf1;
+  pointer-events: auto;
 }
 
 .sidebar-footer {
@@ -4038,6 +4039,11 @@ body,
   border-radius: 999px;
   background: #f4f4f4;
   color: #3f3f46;
+}
+
+.mobile-session-list-btn,
+.mobile-session-new-btn {
+  display: none;
 }
 
 .mobile-session-list-btn:hover:not(:disabled),
@@ -4359,6 +4365,11 @@ body,
 
   .chat-header-right {
     justify-content: flex-start;
+  }
+
+  .mobile-session-list-btn,
+  .mobile-session-new-btn {
+    display: inline-flex;
   }
 
   .chat-model-pill {

@@ -13,6 +13,13 @@ This file is the source of milestone progress, validation commands, and next act
 
 ## Latest Update (2026-03-18)
 
+- `Post-M8` prototype-aligned sidebar interaction refined:
+  - thread-row action trigger (`...`) now stays hidden by default and only appears on hover/focus or while its menu is open, matching the requested conversation-list behavior.
+  - desktop header no longer shows the mobile-only `会话` / `+` session shortcuts, so the left rail remains the primary always-visible list on large screens.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: Playwright smoke via `with_server.py` + mocked `/v1/*` responses confirmed hidden-by-default row actions and no desktop session shortcut button
+
 - `Post-M8` Web UI shell now mirrors the provided ChatGPT-style prototype more closely:
   - restyled the embedded SPA around the prototype's dark left rail, white chat canvas, centered message column, light-gray user bubbles, and floating rounded composer.
   - simplified thread rows into grouped conversation entries (`今天` / `前 7 天` / `更早`), moved desktop session access into the existing overlay flow, and aligned header/input treatments with the prototype while keeping existing Ngent features available.
