@@ -3800,6 +3800,7 @@ body,
   font-size: 14px;
   font-weight: 500;
   line-height: 1.4;
+  color: #ececf1;
 }
 
 .thread-item-title mark {
@@ -4020,6 +4021,7 @@ body,
   padding: 0;
   border: none;
   background: transparent;
+  opacity: .9;
 }
 
 .storage-usage__label,
@@ -4227,7 +4229,7 @@ body,
 }
 
 .input-wrapper {
-  gap: 12px;
+  gap: 8px;
   background: #f4f4f4;
   border: 1px solid transparent;
   border-radius: 24px;
@@ -4248,16 +4250,24 @@ body,
   color: #7c7c88;
 }
 
+.pending-uploads--empty {
+  display: none;
+}
+
+.pending-uploads:not(.pending-uploads--empty) {
+  margin-bottom: 2px;
+}
+
 .message-input {
-  min-height: 26px;
+  min-height: 24px;
   max-height: 192px;
-  padding: 4px 4px 0;
+  padding: 2px 4px 0;
   font-size: 15px;
   line-height: 1.6;
 }
 
 .input-compose-bar {
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
@@ -4265,7 +4275,7 @@ body,
 .compose-accessories {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
   flex: 1 1 auto;
 }
@@ -4297,6 +4307,19 @@ body,
 .thread-config-switches {
   flex: 1 1 auto;
   gap: 8px;
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: max-width 180ms ease, opacity 140ms ease;
+}
+
+.input-wrapper:hover .thread-config-switches,
+.input-wrapper:focus-within .thread-config-switches,
+.thread-config-switches:focus-within {
+  max-width: 320px;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .thread-model-switch--composer {
@@ -4427,6 +4450,9 @@ body,
   .thread-config-switches {
     width: 100%;
     flex-wrap: wrap;
+    max-width: none;
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .mobile-session-sheet {

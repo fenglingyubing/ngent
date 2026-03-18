@@ -13,6 +13,13 @@ This file is the source of milestone progress, validation commands, and next act
 
 ## Latest Update (2026-03-18)
 
+- `Post-M8` prototype shell tightened again toward the provided mock:
+  - hid the empty upload helper row from the composer so the default input block now matches the cleaner prototype state instead of showing an extra hint line inside the box.
+  - collapsed model/reasoning pills by default on desktop and only reveal them when the composer is hovered/focused, reducing visual noise and bringing the resting state closer to the original prototype.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: Playwright smoke via `with_server.py` + mocked `/v1/*` responses confirmed hidden empty upload row and focus-revealed config pills
+
 - `Post-M8` prototype-aligned sidebar interaction refined:
   - thread-row action trigger (`...`) now stays hidden by default and only appears on hover/focus or while its menu is open, matching the requested conversation-list behavior.
   - desktop header no longer shows the mobile-only `会话` / `+` session shortcuts, so the left rail remains the primary always-visible list on large screens.
