@@ -13,6 +13,13 @@ This file is the source of milestone progress, validation commands, and next act
 
 ## Latest Update (2026-03-18)
 
+- `Post-M8` composer hover jitter removed:
+  - desktop composer config pills no longer open on plain mouse hover, which eliminates the visual jump reported in the empty upper area of the input shell.
+  - model/reasoning pills now float above the footer row only while the composer is actually focused, so desktop layout stays stable at rest and while moving the mouse across the composer.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: Playwright smoke via `with_server.py` + mocked `/v1/*` responses confirmed wrapper bounds stay unchanged on hover and remain stable when the focused config pills appear
+
 - `Post-M8` prototype shell tightened again toward the provided mock:
   - hid the empty upload helper row from the composer so the default input block now matches the cleaner prototype state instead of showing an extra hint line inside the box.
   - collapsed model/reasoning pills by default on desktop and only reveal them when the composer is hovered/focused, reducing visual noise and bringing the resting state closer to the original prototype.

@@ -4278,6 +4278,7 @@ body,
   gap: 8px;
   min-width: 0;
   flex: 1 1 auto;
+  position: relative;
 }
 
 .composer-actions {
@@ -4305,20 +4306,27 @@ body,
 }
 
 .thread-config-switches {
-  flex: 1 1 auto;
+  position: absolute;
+  left: 46px;
+  bottom: calc(100% + 8px);
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: nowrap;
   gap: 8px;
-  max-width: 0;
-  overflow: hidden;
+  max-width: none;
+  overflow: visible;
   opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
   pointer-events: none;
-  transition: max-width 180ms ease, opacity 140ms ease;
+  transition: opacity 140ms ease, transform 140ms ease, visibility 140ms ease;
 }
 
-.input-wrapper:hover .thread-config-switches,
 .input-wrapper:focus-within .thread-config-switches,
 .thread-config-switches:focus-within {
-  max-width: 320px;
   opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
   pointer-events: auto;
 }
 
@@ -4448,10 +4456,16 @@ body,
   }
 
   .thread-config-switches {
+    position: static;
+    left: auto;
+    bottom: auto;
     width: 100%;
+    display: grid;
     flex-wrap: wrap;
     max-width: none;
     opacity: 1;
+    visibility: visible;
+    transform: none;
     pointer-events: auto;
   }
 
