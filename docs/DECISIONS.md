@@ -63,6 +63,30 @@
 - ADR-059: Normalize common markdown fence labels and auto-detect unknown code blocks for Web UI highlighting. (Accepted)
 - ADR-060: Align the Web UI shell with the provided ChatGPT-style prototype while keeping Ngent features intact. (Accepted)
 - ADR-061: Force the prototype mobile header into stacked rows before content starts shrinking. (Accepted)
+- ADR-062: Use the `phone.html` prototype as the mobile-specific shell reference. (Accepted)
+
+## ADR-062: Use The `phone.html` Prototype As The Mobile-Specific Shell Reference
+
+- Status: Accepted
+- Date: 2026-03-19
+- Context:
+  - the repository now includes `phone.html`, which captures a more opinionated phone layout than the broader desktop prototype: centered top bar, dark slide-out drawer, airy message lane, and a compact rounded bottom composer.
+  - the existing mobile Web UI already functioned, but its header/action composition still looked like a compressed desktop layout rather than an interface intentionally designed for phones.
+  - ngent still needs to preserve mobile access to session switching, fresh-session creation, uploads, config pills, and session info.
+- Decision:
+  - treat `phone.html` as the visual reference for the mobile shell only, while keeping the existing desktop shell unchanged.
+  - redesign the mobile header around a centered model/meta stack, keep the info affordance on the top row, and move session actions into a distinct second-row chip strip.
+  - align the mobile drawer and composer with the prototype's tone: dark drawer with explicit close affordance, lighter rounded composer shell, tighter message spacing, and no horizontal overflow.
+- Consequences:
+  - phone layouts now feel intentionally mobile-first instead of merely responsive.
+  - ngent-specific controls remain available, but they are visually subordinated to the cleaner mobile shell.
+  - future mobile tweaks should compare against `phone.html` before borrowing desktop-shell conventions.
+- Alternatives considered:
+  - continue refining the mobile view only through generic responsive shrink rules.
+  - copy the desktop prototype one-to-one onto phones.
+  - hide session/config controls more aggressively to match the prototype at the cost of functionality.
+- Follow-up actions:
+  - repeat the same comparison against the live embedded server on a Go-enabled host and capture a real-device screenshot baseline.
 
 ## ADR-061: Force The Prototype Mobile Header Into Stacked Rows Before Content Starts Shrinking
 

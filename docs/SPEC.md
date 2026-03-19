@@ -690,17 +690,21 @@ and upstream ACP schema:
 ### 20.2 Mobile Layout Rules
 
 - the app shell uses `100dvh` plus safe-area inset padding so the header, drawer, composer, and bottom-sheet-style modals stay clear of browser UI and device cutouts.
+- `phone.html` is the visual reference for the phone-only shell direction.
 - on mobile chat screens:
-  - the header may wrap into two rows
+  - the header becomes a deliberate two-tier mobile composition rather than a compressed desktop bar
+  - top row: left drawer trigger, centered model/meta stack, right-side info affordance
+  - second row: compact session action chips and optional full-width cancel control
   - the prototype shell's inner `.chat-header-bar` must itself wrap into full-width title and action rows before the storage badge or action labels start shrinking
   - the right-side action row uses two flexible session CTA slots plus a trailing compact info affordance, and any visible cancel action may consume a full extra row
   - storage usage remains visible beneath the title instead of being dropped
   - the message list uses tighter padding than desktop
   - the empty state is vertically compressed to preserve composer visibility
+- the mobile drawer should feel like the prototype's dark slide-out sheet and expose an explicit close affordance in addition to backdrop dismissal
 - the composer becomes touch-first on mobile:
   - textarea first
-  - model/reasoning pickers in a compact row or stacked column on very narrow devices
-  - upload/send actions in a full-width bottom action row
+  - model/reasoning pickers remain accessible but visually subordinate inside the rounded composer shell
+  - upload/send actions stay anchored to the composer edge without causing horizontal overflow
 - mobile modals align to the viewport bottom with larger radii and safe-area-aware footer padding.
 
 ### 20.3 Non-Goals

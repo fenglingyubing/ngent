@@ -13,6 +13,14 @@ This file is the source of milestone progress, validation commands, and next act
 
 ## Latest Update (2026-03-19)
 
+- `Post-M8` mobile Web UI now follows the `phone.html` prototype more closely:
+  - reworked the phone header into a centered two-tier composition: left drawer trigger, centered model/storage meta, top-right info button, and a second-row session action strip.
+  - tightened the mobile composer into the prototype's softer rounded shell, kept config pills usable without covering the textarea, and added a dedicated mobile drawer close button to match the dark-sheet prototype behavior.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: Playwright mobile fixture at `390px` confirmed centered header, top-row info trigger, second-row session actions, visible drawer close control, inset composer shell, and zero horizontal overflow
+    - blocked in current environment: `go test ./...` (`go` not installed or not in PATH)
+
 - `Post-M8` prototype mobile header now stacks cleanly on phones:
   - forced the inner `.chat-header-bar` to wrap on mobile and moved the session shortcut cluster into a grid, so the title column and storage badge keep usable width instead of collapsing into a narrow strip.
   - made the mobile `查看会话` / `新建会话` buttons fill flexible columns while the info trigger stays pinned at the edge, eliminating the cramped layout shown in the mobile screenshot.

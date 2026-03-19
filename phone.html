@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pure Mobile AI Chat UI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 移动端隐藏原生滚动条 */
+        ::-webkit-scrollbar { display: none; }
+        * { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        /* 抽屉导航动画 */
+        #drawer { transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .drawer-open { transform: translateX(0) !important; }
+        
+        /* 遮罩层动画 */
+        #overlay { transition: opacity 0.3s ease; }
+        .overlay-active { opacity: 1 !important; pointer-events: auto !important; }
+    </style>
+</head>
+<body class="h-screen w-screen bg-white text-[#0d0d0d] font-sans overflow-hidden flex flex-col antialiased relative">
+
+    <div id="overlay" class="fixed inset-0 bg-black/60 z-40 opacity-0 pointer-events-none"></div>
+    <aside id="drawer" class="fixed left-0 top-0 bottom-0 w-[280px] bg-[#171717] text-[#ececf1] z-50 flex flex-col transform -translate-x-full">
+        <div class="h-14 flex items-center justify-between px-4 border-b border-white/10">
+            <button class="flex items-center gap-2 text-sm font-medium hover:text-white">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                新对话
+            </button>
+            <button id="close-drawer" class="p-2 text-gray-400 hover:text-white">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l18 18"></path></svg>
+            </button>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-3 space-y-6">
+            <div>
+                <h3 class="text-xs font-semibold text-[#8e8ea0] px-2 mb-2">今天</h3>
+                <ul class="space-y-1">
+                    <li class="px-3 py-2.5 bg-[#202123] rounded-lg text-sm truncate text-white">java八股文需要背到什么程...</li>
+                    <li class="px-3 py-2.5 rounded-lg text-sm truncate text-[#ececf1]">ArrayList源码里的hugeCa...</li>
+                </ul>
+            </div>
+            <div>
+                <h3 class="text-xs font-semibold text-[#8e8ea0] px-2 mb-2">前 7 天</h3>
+                <ul class="space-y-1">
+                    <li class="px-3 py-2.5 rounded-lg text-sm truncate text-[#ececf1]">给我一张决策表的图</li>
+                    <li class="px-3 py-2.5 rounded-lg text-sm truncate text-[#ececf1]">在java中能不能修改HashMap...</li>
+                </ul>
+            </div>
+        </div>
+    </aside>
+
+    <header class="h-14 flex items-center justify-between px-3 border-b border-gray-100 bg-white shrink-0 z-10">
+        <button id="open-drawer" class="p-2 text-gray-600 active:bg-gray-100 rounded-md">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+        </button>
+        
+        <div class="flex flex-col items-center justify-center">
+            <span class="text-[15px] font-semibold text-gray-900">gpt-5.4</span>
+            <span class="text-[11px] text-gray-400">Codex · 32MB/5.0GB</span>
+        </div>
+
+        <button class="p-2 text-gray-600 active:bg-gray-100 rounded-md">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"></path></svg>
+        </button>
+    </header>
+
+    <main class="flex-1 overflow-y-auto w-full flex flex-col px-4 pt-6 pb-[120px] gap-6 bg-white">
+        
+        <div class="flex justify-end w-full">
+            <div class="max-w-[85%] bg-[#f4f4f4] text-[#0d0d0d] rounded-2xl rounded-tr-sm px-4 py-2.5">
+                <p class="text-[15px] leading-relaxed">java八股文需要背到什么程度才能去找实习？</p>
+            </div>
+        </div>
+
+        <div class="flex flex-col w-full gap-2">
+            <div class="flex items-center gap-2">
+                <div class="w-6 h-6 rounded-full bg-[#10a37f] flex items-center justify-center text-white">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A6.0651 6.0651 0 0 0 19.02 19.818a5.9847 5.9847 0 0 0 3.9977-2.9001 6.0516 6.0516 0 0 0-.7358-7.0968zM8.7505 19.3826a4.5468 4.5468 0 0 1-2.88-1.1506 4.5047 4.5047 0 0 1-1.317-3.0805v-5.2662l4.197 2.4231v4.832c-.0045.088-.0045.176 0 .264v1.9782zm6.5255-14.765a4.5468 4.5468 0 0 1 2.88 1.1505 4.5047 4.5047 0 0 1 1.317 3.0806v5.2662l-4.197-2.4231v-4.832c.0045-.088.0045-.176 0-.264v-1.9782zM4.553 10.334a4.5468 4.5468 0 0 1 1.1444-2.883 4.5047 4.5047 0 0 1 3.0768-1.325h5.2592l-2.4199 4.2023H6.7816a.4655.4655 0 0 0-.2636.0046H4.553zm14.894 3.332a4.5468 4.5468 0 0 1-1.1444 2.883 4.5047 4.5047 0 0 1-3.0768 1.325h-5.2592l2.4199-4.2023h4.832a.4655.4655 0 0 0 .2636-.0046h1.9649zm-8.4975-4.4984l-2.0985-1.2116v7.0094l2.0985 1.2115 4.197-2.423v-7.0095l-4.197 2.4232z"></path></svg>
+                </div>
+                <span class="text-[13px] font-semibold text-gray-800">gpt-5.4</span>
+            </div>
+            <div class="text-[#0d0d0d] prose prose-slate max-w-none text-[15px] pl-8">
+                <p class="mb-3">不用背到“面试官问啥都能原封不动复述”的程度，<strong>能把高频题讲明白 + 能结合项目说出来</strong>，就已经可以开始找 Java 实习了。</p>
+                <h4 class="font-bold text-[15px] mb-1.5 mt-4">先说结论</h4>
+                <ul class="list-disc pl-4 space-y-1.5 mb-4">
+                    <li><strong>实习更看重：</strong> 基础是否扎实、能不能写代码、有没有项目</li>
+                    <li><strong>八股要做到：</strong> 高频必会，常见熟悉，冷门知道即可</li>
+                    <li>不要等“全背完”再投，通常会错过最佳时间</li>
+                </ul>
+            </div>
+        </div>
+    </main>
+
+    <footer class="absolute bottom-0 left-0 w-full bg-white pt-2 pb-6 px-4 z-20 before:absolute before:top-[-20px] before:left-0 before:w-full before:h-[20px] before:bg-gradient-to-t before:from-white before:to-transparent">
+        <div class="flex items-end bg-[#f4f4f4] rounded-3xl border border-gray-200 overflow-hidden pl-2 pr-1.5 py-1.5">
+            <button class="p-2.5 text-gray-500 active:text-black shrink-0 mb-[1px]">
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+            </button>
+
+            <textarea 
+                id="chat-input"
+                class="flex-1 bg-transparent py-2.5 px-1 max-h-[120px] resize-none outline-none text-[#0d0d0d] text-[15px] leading-relaxed placeholder:text-gray-400" 
+                rows="1" 
+                placeholder="给 gpt-5.4 发消息..."></textarea>
+
+            <button class="p-2 bg-black text-white rounded-full shrink-0 mb-0.5 active:scale-95 transition-transform">
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+            </button>
+        </div>
+        <div class="h-[env(safe-area-inset-bottom)]"></div>
+    </footer>
+
+    <script>
+        // 处理抽屉逻辑
+        const drawer = document.getElementById('drawer');
+        const overlay = document.getElementById('overlay');
+        const openBtn = document.getElementById('open-drawer');
+        const closeBtn = document.getElementById('close-drawer');
+
+        function toggleDrawer() {
+            drawer.classList.toggle('drawer-open');
+            overlay.classList.toggle('overlay-active');
+        }
+
+        openBtn.addEventListener('click', toggleDrawer);
+        closeBtn.addEventListener('click', toggleDrawer);
+        overlay.addEventListener('click', toggleDrawer);
+
+        // 处理输入框高度自适应
+        const textarea = document.getElementById('chat-input');
+        textarea.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = (this.scrollHeight) + 'px';
+        });
+    </script>
+</body>
+</html>

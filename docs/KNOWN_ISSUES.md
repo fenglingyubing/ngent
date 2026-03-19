@@ -22,7 +22,7 @@
 - Affects: final acceptance of the new Web UI shell in environments where the embedded server cannot be launched locally
 - Symptom:
   - the prototype-aligned shell was validated with frontend build output and Playwright using mocked `/v1/*` responses.
-  - the latest phone-header wrapping fix was also verified through a static `390px` Playwright fixture rather than a live embedded server.
+  - the latest `phone.html`-aligned mobile header/composer refinements were also verified through a static `390px` Playwright fixture rather than a live embedded server.
   - the current workspace does not expose a runnable `go` binary, so the exact same visual pass could not yet be repeated against `go run ./cmd/ngent` in this environment.
 - Workaround:
   - run `make run` or `go run ./cmd/ngent` on a host with Go 1.24 installed, then manually verify the embedded Web UI against a live server.

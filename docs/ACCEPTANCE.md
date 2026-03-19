@@ -509,6 +509,7 @@ This checklist defines executable acceptance checks for requirements 1-16.
 - Expected:
   - the mobile header wraps cleanly without clipping the title, agent badge, or storage usage pill.
   - the prototype header's inner `.chat-header-bar` stacks into separate full-width title/actions rows instead of shrinking both regions onto one line.
+  - the mobile shell visually tracks `phone.html`: centered top-row title/meta, top-right info affordance, second-row session action chips, dark drawer with close affordance, and a rounded inset composer shell.
   - the empty state and message list use reduced vertical padding so the composer remains visible above the fold.
   - the composer stacks controls for touch use: textarea first, config pickers beneath, and upload/send actions in a full-width row.
   - bottom controls and modals respect browser safe areas and do not sit flush against notches or bottom bars.
@@ -516,6 +517,7 @@ This checklist defines executable acceptance checks for requirements 1-16.
   - `cd internal/webui/web && npm run build`
   - `PATH=/usr/local/go/bin:$PATH go test ./...`
   - Playwright smoke: render a `390px` mobile fixture and assert `.chat-header-right` starts below `.chat-header-left`, with `document.documentElement.scrollWidth == document.documentElement.clientWidth`
+  - Playwright smoke: render a `390px` mobile fixture and assert header center alignment, top-row `.session-info-trigger`, visible `.mobile-drawer-close-btn`, and inset `.input-wrapper`
   - manual: `make run` -> open `http://127.0.0.1:8686/` on a phone or responsive emulator, confirm the mobile layout matches the expected stacked composer and compact header behavior
 
 ## Requirement 28: Refresh Recovers Active Thread And Mobile Can Start Fresh Sessions

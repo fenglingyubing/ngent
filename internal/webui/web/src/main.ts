@@ -4043,6 +4043,9 @@ function renderShell(): void {
             </span>
             ${iconPlus}
           </button>
+          <button class="btn btn-icon mobile-drawer-close-btn" id="mobile-drawer-close-btn" type="button" aria-label="关闭侧边栏">
+            ${iconClose}
+          </button>
         </div>
 
         <div class="sidebar-search">
@@ -4099,6 +4102,7 @@ function renderShell(): void {
   document.getElementById('settings-btn')?.addEventListener('click', () => settingsPanel.open())
   document.getElementById('new-thread-btn')?.addEventListener('click', openNewThread)
   document.getElementById('new-thread-empty-btn')?.addEventListener('click', openNewThread)
+  document.getElementById('mobile-drawer-close-btn')?.addEventListener('click', closeMobileSidebar)
 
   const searchEl = document.getElementById('search-input') as HTMLInputElement | null
   searchEl?.addEventListener('input', () => {
