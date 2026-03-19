@@ -4278,6 +4278,7 @@ body,
   gap: 8px;
   min-width: 0;
   flex: 1 1 auto;
+  flex-wrap: wrap;
   position: relative;
 }
 
@@ -4306,32 +4307,29 @@ body,
 }
 
 .thread-config-switches {
-  position: absolute;
-  left: 46px;
-  bottom: calc(100% + 8px);
-  flex: 0 0 auto;
+  position: static;
+  flex: 1 1 auto;
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 8px;
-  max-width: none;
+  max-width: 100%;
   overflow: visible;
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(4px);
-  pointer-events: none;
-  transition: opacity 140ms ease, transform 140ms ease, visibility 140ms ease;
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  pointer-events: auto;
 }
 
 .input-wrapper:focus-within .thread-config-switches,
 .thread-config-switches:focus-within {
   opacity: 1;
   visibility: visible;
-  transform: translateY(0);
+  transform: none;
   pointer-events: auto;
 }
 
 .thread-model-switch--composer {
-  max-width: none;
+  max-width: 100%;
 }
 
 .thread-model-switch--composer .thread-model-trigger {

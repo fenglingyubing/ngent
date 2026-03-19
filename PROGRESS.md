@@ -11,7 +11,17 @@ This file is the source of milestone progress, validation commands, and next act
 
 - `Post-M8` ACP multi-agent readiness and maintenance.
 
-## Latest Update (2026-03-18)
+## Latest Update (2026-03-19)
+
+- `Post-M8` composer config pills no longer overlap draft text:
+  - moved the desktop composer model/reasoning switch group back into normal footer flow instead of absolutely positioning it above the compose row, so typed text in the textarea is no longer covered by the pills.
+  - allowed the footer accessories row to wrap when needed, preserving the fix on both desktop and narrow/mobile widths.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: Playwright smoke via `with_server.py` + production preview confirmed the textarea and composer config switch group do not overlap on desktop or mobile fixture layouts
+    - blocked in current environment: `go test ./...` (`go` not installed or not in PATH)
+
+## Previous Update (2026-03-18)
 
 - `Post-M8` composer hover jitter removed:
   - desktop composer config pills no longer open on plain mouse hover, which eliminates the visual jump reported in the empty upper area of the input shell.

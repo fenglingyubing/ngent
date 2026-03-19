@@ -106,10 +106,12 @@ This checklist defines executable acceptance checks for requirements 1-16.
 - Additional UI shell expectations:
   - desktop defaults to a prototype-aligned shell with a dark left conversation rail, centered white chat canvas, plain-text assistant response layout, and a floating rounded composer.
   - session browsing remains available through the overlay sheet instead of a permanently visible desktop right rail.
+  - composer footer controls must not overlap textarea content on desktop or mobile-width layouts.
 - Verification command:
   - `go test ./internal/webui -count=1` (checks `GET /` returns 200 with `text/html` content-type and SPA fallback)
   - `go test ./internal/httpapi -run TestTurnsSSEIncludesReasoningAndPersistsHistory -count=1`
   - `cd internal/webui/web && npm run build`
+  - Playwright smoke: run a production-preview fixture and assert `.thread-config-switches` does not intersect `#message-input`
   - manual: `make run` → open `http://127.0.0.1:8686/` or scan the startup QR code from another device, confirm live `思考中` stays expanded while streaming, finalized reasoning label changes to `思考过程`, markdown inside expanded `思考过程` renders correctly, and the section collapses after the turn completes
 
 ## Requirement 13A: Web Chat Turn Attachments
