@@ -67,11 +67,11 @@
   /* Font */
   --font: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: ui-monospace, 'Cascadia Code', 'Fira Code', Menlo, monospace;
-  --font-size-xs:   12px;
-  --font-size-sm:   13px;
-  --font-size-md:   14px;
-  --font-size-base: 15px;
-  --font-size-lg:   16px;
+  --font-size-xs:   13px;
+  --font-size-sm:   15px;
+  --font-size-md:   16px;
+  --font-size-base: 18px;
+  --font-size-lg:   20px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -3738,6 +3738,7 @@ body,
   color: #ececf1;
   background-position: 10px center;
   padding-left: 30px;
+  font-size: 17px;
 }
 
 .search-input,
@@ -3764,7 +3765,7 @@ body,
 
 .thread-group-title {
   padding: 0 24px 8px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   color: #8e8ea0;
 }
@@ -3797,7 +3798,7 @@ body,
 }
 
 .thread-item-title {
-  font-size: 14px;
+  font-size: 18px;
   font-weight: 500;
   line-height: 1.4;
   color: #ececf1;
@@ -4003,17 +4004,19 @@ body,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: 16px;
   color: #6b7280;
 }
 
 .chat-header-meta {
-  font-size: 12px;
+  font-size: 14px;
   color: #a1a1aa;
 }
 
 .chat-header-right {
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .storage-usage {
@@ -4027,7 +4030,7 @@ body,
 .storage-usage__label,
 .storage-usage__value,
 .storage-usage__percent {
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .storage-usage__label,
@@ -4035,17 +4038,19 @@ body,
   color: #8e8ea0;
 }
 
-.mobile-session-list-btn {
-  min-height: 34px;
-  padding: 0 12px;
+.mobile-session-list-btn,
+.mobile-session-new-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 14px;
   border-radius: 999px;
   background: #f4f4f4;
   color: #3f3f46;
-}
-
-.mobile-session-list-btn,
-.mobile-session-new-btn {
-  display: none;
+  font-size: 16px;
+  font-weight: 500;
 }
 
 .mobile-session-list-btn:hover:not(:disabled),
@@ -4054,11 +4059,21 @@ body,
   background: #ededed;
 }
 
-.mobile-session-new-btn,
+.mobile-session-list-btn svg,
+.mobile-session-new-btn svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
 .session-info-trigger {
   width: 34px;
   height: 34px;
   border-radius: 12px;
+  color: #5f6368;
+}
+
+.mobile-session-new-btn {
   color: #5f6368;
 }
 
@@ -4262,7 +4277,7 @@ body,
   min-height: 24px;
   max-height: 192px;
   padding: 2px 4px 0;
-  font-size: 15px;
+  font-size: 18px;
   line-height: 1.6;
 }
 

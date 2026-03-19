@@ -3135,15 +3135,16 @@ function renderChatThread(t: Thread): string {
             id="mobile-session-list-btn"
             type="button"
             aria-label="查看会话列表">
-            <span>会话</span>
+            <span>查看会话</span>
           </button>
           <button
-            class="btn btn-icon mobile-session-new-btn"
+            class="btn btn-ghost btn-sm mobile-session-new-btn"
             id="mobile-new-session-btn"
             type="button"
             aria-label="新建会话"
             ${isSwitchingSession ? 'disabled' : ''}>
             ${iconPlus}
+            <span>新建会话</span>
           </button>
           <button class="btn btn-sm btn-danger" id="cancel-btn" style="display:none" aria-label="取消当前轮次">取消</button>
           ${renderSessionInfoPopover(t)}

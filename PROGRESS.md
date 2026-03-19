@@ -13,6 +13,14 @@ This file is the source of milestone progress, validation commands, and next act
 
 ## Latest Update (2026-03-19)
 
+- `Post-M8` prototype shell readability and session shortcuts refined:
+  - raised the primary Web UI reading surfaces to an 18-20px scale so the sidebar thread labels, chat bubbles, composer input, and key header text are easier to read on large desktop displays.
+  - restored always-visible desktop `查看会话` / `新建会话` header shortcuts with explicit text labels instead of hiding them behind mobile-only CSS or an icon-only affordance.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: Playwright smoke via `with_server.py` + production preview confirmed message/input/thread font sizes meet the new larger baseline and both session shortcut buttons are visible with non-zero width
+    - blocked in current environment: `go test ./...` (`go` not installed or not in PATH)
+
 - `Post-M8` composer config pills no longer overlap draft text:
   - moved the desktop composer model/reasoning switch group back into normal footer flow instead of absolutely positioning it above the compose row, so typed text in the textarea is no longer covered by the pills.
   - allowed the footer accessories row to wrap when needed, preserving the fix on both desktop and narrow/mobile widths.

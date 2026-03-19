@@ -33,6 +33,8 @@ Modules:
   - centered white chat canvas with plain-text assistant responses and light-gray user bubbles.
   - floating rounded composer anchored to the bottom of the chat canvas.
 - composer footer controls (upload, model, reasoning, send) must stay in normal layout flow and may wrap, but must not visually overlap the textarea draft content.
+- the primary readable UI surfaces in the prototype shell (chat bubbles, composer input, thread titles, key header labels) target a larger desktop-friendly scale around `18px`, while metadata may remain smaller.
+- desktop header keeps explicit text affordances for session browsing/session creation instead of hiding them behind mobile-only visibility rules.
 - Ngent-specific controls such as session browsing, model/reasoning pickers, uploads, and storage indicators remain present, but are folded into the header/composer instead of a persistent right-side desktop rail.
 - session browsing uses the overlay sheet pattern on both desktop and mobile so the main canvas stays visually consistent with the prototype.
 
