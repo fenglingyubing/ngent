@@ -13,6 +13,13 @@ This file is the source of milestone progress, validation commands, and next act
 
 ## Latest Update (2026-03-19)
 
+- `Post-M8` user message bubbles now align to the right edge again:
+  - corrected the prototype-shell override so user rows no longer combine `row-reverse` with a left-packing flex justification; this restores the expected right-side placement for user messages.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: Playwright smoke via `with_server.py` + production preview confirmed `.message--user .message-group` sits against the right edge of its row
+    - blocked in current environment: `go test ./...` (`go` not installed or not in PATH)
+
 - `Post-M8` prototype shell readability and session shortcuts refined:
   - raised the primary Web UI reading surfaces to an 18-20px scale so the sidebar thread labels, chat bubbles, composer input, and key header text are easier to read on large desktop displays.
   - restored always-visible desktop `查看会话` / `新建会话` header shortcuts with explicit text labels instead of hiding them behind mobile-only CSS or an icon-only affordance.

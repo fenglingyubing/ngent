@@ -108,12 +108,14 @@ This checklist defines executable acceptance checks for requirements 1-16.
   - session browsing remains available through the overlay sheet instead of a permanently visible desktop right rail.
   - composer footer controls must not overlap textarea content on desktop or mobile-width layouts.
   - desktop header exposes visible `查看会话` and `新建会话` shortcuts, and primary reading surfaces stay near an `18px` baseline.
+  - user message bubbles remain visibly right-aligned inside the chat column.
 - Verification command:
   - `go test ./internal/webui -count=1` (checks `GET /` returns 200 with `text/html` content-type and SPA fallback)
   - `go test ./internal/httpapi -run TestTurnsSSEIncludesReasoningAndPersistsHistory -count=1`
   - `cd internal/webui/web && npm run build`
   - Playwright smoke: run a production-preview fixture and assert `.thread-config-switches` does not intersect `#message-input`
   - Playwright smoke: run a production-preview fixture and assert `#mobile-session-list-btn` / `#mobile-new-session-btn` are visible plus `.message-bubble`, `#message-input`, and `.thread-item-title` resolve to at least `18px`
+  - Playwright smoke: run a production-preview fixture and assert `.message--user .message-group` right edge is effectively flush with the user message row
   - manual: `make run` → open `http://127.0.0.1:8686/` or scan the startup QR code from another device, confirm live `思考中` stays expanded while streaming, finalized reasoning label changes to `思考过程`, markdown inside expanded `思考过程` renders correctly, and the section collapses after the turn completes
 
 ## Requirement 13A: Web Chat Turn Attachments

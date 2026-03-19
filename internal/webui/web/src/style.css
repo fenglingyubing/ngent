@@ -4093,7 +4093,7 @@ body,
 }
 
 .message--user {
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .message--user .message-group {
