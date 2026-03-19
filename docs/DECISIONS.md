@@ -62,6 +62,30 @@
 - ADR-058: Preserve user scroll position across streaming completion and render the live bubble with final shell dimensions. (Accepted)
 - ADR-059: Normalize common markdown fence labels and auto-detect unknown code blocks for Web UI highlighting. (Accepted)
 - ADR-060: Align the Web UI shell with the provided ChatGPT-style prototype while keeping Ngent features intact. (Accepted)
+- ADR-061: Force the prototype mobile header into stacked rows before content starts shrinking. (Accepted)
+
+## ADR-061: Force The Prototype Mobile Header Into Stacked Rows Before Content Starts Shrinking
+
+- Status: Accepted
+- Date: 2026-03-19
+- Context:
+  - the prototype-aligned shell introduced an inner `.chat-header-bar` flex container that owns the title/storage column and the session/action cluster.
+  - on phone widths, both child regions were already assigned `width: 100%`, but the inner bar itself still stayed on one flex row.
+  - that mismatch let the browser shrink both regions instead of stacking them, which collapsed the storage badge into near-vertical text and made the mobile header look broken.
+- Decision:
+  - at `max-width: 768px`, force `.chat-header-bar` to wrap and stretch so the title/storage region and action region become separate full-width rows.
+  - render the action region as a compact grid: two flexible session shortcut buttons plus a trailing fixed-width info trigger, with the cancel button spanning the full row when visible.
+  - keep the storage badge visible in the title column and treat lack of horizontal overflow as an explicit mobile acceptance target.
+- Consequences:
+  - the mobile header now preserves readable storage/status text and consistent CTA sizing instead of compressing into a narrow strip.
+  - desktop layout remains unchanged because the stacking rule only applies to the mobile breakpoint.
+  - future prototype-shell tweaks should treat the inner header bar, not just outer header padding, as the critical mobile layout boundary.
+- Alternatives considered:
+  - hide the storage badge on mobile.
+  - leave the bar on one row and only reduce font sizes/padding.
+  - move the session shortcuts into a separate drawer-only path on phones.
+- Follow-up actions:
+  - repeat the same visual check against the real embedded server on a host with Go 1.24 available.
 
 ## ADR-060: Align The Web UI Shell With The Provided ChatGPT-Style Prototype While Keeping Ngent Features Intact
 

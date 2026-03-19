@@ -692,6 +692,8 @@ and upstream ACP schema:
 - the app shell uses `100dvh` plus safe-area inset padding so the header, drawer, composer, and bottom-sheet-style modals stay clear of browser UI and device cutouts.
 - on mobile chat screens:
   - the header may wrap into two rows
+  - the prototype shell's inner `.chat-header-bar` must itself wrap into full-width title and action rows before the storage badge or action labels start shrinking
+  - the right-side action row uses two flexible session CTA slots plus a trailing compact info affordance, and any visible cancel action may consume a full extra row
   - storage usage remains visible beneath the title instead of being dropped
   - the message list uses tighter padding than desktop
   - the empty state is vertically compressed to preserve composer visibility

@@ -4399,6 +4399,8 @@ body,
   }
 
   .chat-header-bar {
+    flex-wrap: wrap;
+    align-items: stretch;
     gap: 10px;
   }
 
@@ -4407,13 +4409,50 @@ body,
     width: 100%;
   }
 
+  .chat-header-left {
+    align-items: flex-start;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .chat-header-main {
+    flex: 1 1 auto;
+  }
+
   .chat-header-right {
-    justify-content: flex-start;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    align-items: center;
+    justify-content: stretch;
+    gap: 8px;
+  }
+
+  .chat-header-right > * {
+    min-width: 0;
   }
 
   .mobile-session-list-btn,
   .mobile-session-new-btn {
     display: inline-flex;
+    width: 100%;
+    min-width: 0;
+    padding-inline: 12px;
+  }
+
+  .mobile-session-list-btn span,
+  .mobile-session-new-btn span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .session-info {
+    justify-self: end;
+  }
+
+  #cancel-btn {
+    grid-column: 1 / -1;
+    width: 100%;
   }
 
   .chat-model-pill {
@@ -4422,6 +4461,16 @@ body,
 
   .chat-thread-label {
     max-width: 100%;
+  }
+
+  .storage-usage {
+    align-self: flex-start;
+    flex-wrap: nowrap;
+    max-width: 100%;
+  }
+
+  .storage-usage__copy {
+    min-width: 0;
   }
 
   .message-list {
@@ -4506,6 +4555,30 @@ body,
 @media (max-width: 480px) {
   .chat-model-pill {
     font-size: 16px;
+  }
+
+  .chat-header-right {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .mobile-session-list-btn,
+  .mobile-session-new-btn {
+    min-height: 36px;
+    font-size: 15px;
+  }
+
+  .mobile-session-new-btn {
+    grid-column: 1 / 2;
+  }
+
+  .session-info {
+    grid-column: 2 / 3;
+    grid-row: 1 / span 2;
+  }
+
+  .storage-usage {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .message--user .message-group {

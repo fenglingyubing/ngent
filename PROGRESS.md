@@ -13,6 +13,14 @@ This file is the source of milestone progress, validation commands, and next act
 
 ## Latest Update (2026-03-19)
 
+- `Post-M8` prototype mobile header now stacks cleanly on phones:
+  - forced the inner `.chat-header-bar` to wrap on mobile and moved the session shortcut cluster into a grid, so the title column and storage badge keep usable width instead of collapsing into a narrow strip.
+  - made the mobile `查看会话` / `新建会话` buttons fill flexible columns while the info trigger stays pinned at the edge, eliminating the cramped layout shown in the mobile screenshot.
+  - validation:
+    - pass: `cd internal/webui/web && npm run build`
+    - pass: Playwright mobile fixture at `390px` confirmed `.chat-header-right` wraps below `.chat-header-left` and `document.documentElement.scrollWidth == document.documentElement.clientWidth`
+    - blocked in current environment: `go test ./...` (`go` not installed or not in PATH)
+
 - `Post-M8` user message bubbles now align to the right edge again:
   - corrected the prototype-shell override so user rows no longer combine `row-reverse` with a left-packing flex justification; this restores the expected right-side placement for user messages.
   - validation:
